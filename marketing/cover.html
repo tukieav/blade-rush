@@ -144,8 +144,15 @@ if (!square) {
   g.textAlign = 'center'; g.textBaseline = 'middle';
   g.shadowColor = 'rgba(125,249,255,0.9)'; g.shadowBlur = 30 * sq;
   g.fillStyle = '#ffffff';
-  g.font = '900 ' + (130 * sq) + 'px "Segoe UI", Arial, sans-serif';
-  g.fillText('BLADE RUSH', W * 0.5, H * 0.68);
+  // scale font from width so the title never overflows on portrait canvases
+  const fs = Math.min(130 * sq, W * 0.11);
+  g.font = '900 ' + fs + 'px "Segoe UI", Arial, sans-serif';
+  if (W < H) {
+    g.fillText('BLADE', W * 0.5, H * 0.66);
+    g.fillText('RUSH', W * 0.5, H * 0.66 + fs * 1.15);
+  } else {
+    g.fillText('BLADE RUSH', W * 0.5, H * 0.68);
+  }
   g.shadowBlur = 0;
 }
 document.title = 'ready';
