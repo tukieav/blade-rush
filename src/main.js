@@ -640,7 +640,6 @@ function frame(ts) {
 
 // ---------- boot ----------
 (async () => {
-  SDK.loadingStart && SDK.loadingStart();
   await SDK.initSDK();
   SDK.loadingStart();
   best = SDK.loadBest();
