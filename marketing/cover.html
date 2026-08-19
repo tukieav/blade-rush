@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><style>html,body{margin:0;padding:0;background:#000}</style></head>
+<body>
+<canvas id="cover"></canvas>
+<script>
+// Cover generator for Blade Rush — ?w=1920&h=1080 (&sq=1 for square layout)
+const q = new URLSearchParams(location.search);
+const W = parseInt(q.get('w') || '1920', 10);
+const H = parseInt(q.get('h') || '1080', 10);
+const square = q.get('sq') === '1';
+const canvas = document.getElementById('cover');
+canvas.width = W; canvas.height = H;
+const g = canvas.getContext('2d');
+const sq = H / 1080;
+
+// background
+const bg = g.createLinearGradient(0, 0, 0, H);
+bg.addColorStop(0, '#0a0c18'); bg.addColorStop(0.5, '#131940'); bg.addColorStop(1, '#1e1050');
+g.fillStyle = bg; g.fillRect(0, 0, W, H);
+
+function nebula(x, y, r, c) {
+  const n = g.createRadialGradient(x, y, 0, x, y, r);
+  n.addColorStop(0, c); n.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = n; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+}
+nebula(W * 0.2, H * 0.3, W * 0.3, 'rgba(60,30,160,0.3)');
+nebula(W * 0.85, H * 0.65, W * 0.3, 'rgba(255,93,241,0.14)');
+nebula(W * 0.6, H * 0.1, W * 0.25, 'rgba(30,120,180,0.2)');
+
+let seed = 42;
+function rnd() { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; }
+for (let i = 0; i < 240; i++) {
+  g.fillStyle = 'rgba(200,230,255,' + (0.25 + rnd() * 0.6) + ')';
+  g.beginPath(); g.arc(rnd() * W, rnd() * H, rnd() * 2 + 0.4, 0, Math.PI * 2); g.fill();
+}
+
+// wooden target disc
+function drawTarget(cx, cy, r, angle) {
+  g.save(); g.translate(cx, cy);
+  g.shadowColor = '#7df9ff'; g.shadowBlur = 40 * sq;
+  g.strokeStyle = '#7df9ff'; g.lineWidth = 8 * sq;
+  g.beginPath(); g.arc(0, 0, r + 5 * sq, 0, Math.PI * 2); g.stroke();
+  g.shadowBlur = 0;
+  g.rotate(angle);
+  const grad = g.createRadialGradient(0, 0, r * 0.05, 0, 0, r);
+  grad.addColorStop(0, '#a06a38'); grad.addColorStop(0.7, '#7d4e26'); grad.addColorStop(1, '#5c3618');
+  g.fillStyle = grad; g.beginPath(); g.arc(0, 0, r, 0, Math.PI * 2); g.fill();
+  for (let i = 1; i <= 7; i++) {
+    g.strokeStyle = 'rgba(60,34,12,' + (0.25 + (i % 2) * 0.15) + ')';
+    g.lineWidth = (2 + (i % 3)) * sq;
+    g.beginPath(); g.arc(0, 0, r * i / 8 + Math.sin(i * 3.7) * 4 * sq, 0, Math.PI * 2); g.stroke();
+  }
+  for (let i = 0; i < 26; i++) {
+    const a = (i / 26) * Math.PI * 2;
+    g.strokeStyle = 'rgba(50,28,10,0.22)'; g.lineWidth = 1.5 * sq;
+    g.beginPath(); g.moveTo(Math.cos(a) * r * 0.2, Math.sin(a) * r * 0.2);
+    g.lineTo(Math.cos(a + 0.15) * r * 0.92, Math.sin(a + 0.15) * r * 0.92); g.stroke();
+  }
+  g.restore();
+}
+
+function drawBlade(x, y, rot, scale, glow) {
+  g.save(); g.translate(x, y); g.rotate(rot + Math.PI / 2); g.scale(scale, scale);
+  const L = 88, Wd = 16;
+  if (glow) { g.shadowColor = '#7df9ff'; g.shadowBlur = 22; }
+  const grad = g.createLinearGradient(0, -L * 0.55, 0, L * 0.1);
+  grad.addColorStop(0, '#e8ffff'); grad.addColorStop(0.5, '#7df9ff'); grad.addColorStop(1, '#2b8fd4');
+  g.fillStyle = grad;
+  g.beginPath();
+  g.moveTo(0, -L * 0.58);
+  g.quadraticCurveTo(Wd * 0.55, -L * 0.2, Wd * 0.4, L * 0.05);
+  g.lineTo(-Wd * 0.4, L * 0.05);
+  g.quadraticCurveTo(-Wd * 0.55, -L * 0.2, 0, -L * 0.58);
+  g.fill();
+  g.shadowBlur = 0;
+  g.strokeStyle = 'rgba(255,255,255,0.9)'; g.lineWidth = 2;
+  g.beginPath(); g.moveTo(0, -L * 0.5); g.lineTo(0, 0); g.stroke();
+  g.fillStyle = '#1a2436';
+  g.fillRect(-Wd * 0.62, L * 0.05, Wd * 1.24, Wd * 0.35);
+  const hg = g.createLinearGradient(0, L * 0.1, 0, L * 0.5);
+  hg.addColorStop(0, '#3a4a66'); hg.addColorStop(1, '#141c2c');
+  g.fillStyle = hg;
+  g.fillRect(-Wd * 0.3, L * 0.1, Wd * 0.6, L * 0.34);
+  g.fillStyle = '#ff5df1';
+  g.fillRect(-Wd * 0.3, L * 0.42, Wd * 0.6, Wd * 0.28);
+  g.restore();
+}
+
+function drawCrystal(x, y, rot, s) {
+  g.save(); g.translate(x, y); g.rotate(rot); g.scale(s, s);
+  g.shadowColor = '#7df9ff'; g.shadowBlur = 20;
+  const grad = g.createLinearGradient(0, -18, 0, 18);
+  grad.addColorStop(0, '#d8fbff'); grad.addColorStop(0.5, '#7df9ff'); grad.addColorStop(1, '#2fa4d8');
+  g.fillStyle = grad;
+  g.beginPath();
+  g.moveTo(0, -20); g.lineTo(12, -4); g.lineTo(8, 16); g.lineTo(-8, 16); g.lineTo(-12, -4);
+  g.closePath(); g.fill();
+  g.shadowBlur = 0;
+  g.strokeStyle = 'rgba(255,255,255,0.7)'; g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(0, -20); g.lineTo(0, 16); g.moveTo(-12, -4); g.lineTo(12, -4); g.stroke();
+  g.restore();
+}
+
+function stuckBlade(cx, cy, r, wa, scale) {
+  const L = 88 * scale;
+  const bx = cx + Math.cos(wa) * (r - 30 * scale + L * 0.58);
+  const by = cy + Math.sin(wa) * (r - 30 * scale + L * 0.58);
+  drawBlade(bx, by, wa + Math.PI, scale, true);
+}
+
+if (!square) {
+  // 16:9 — big disc right, title left, flying blade
+  const cx = W * 0.72, cy = H * 0.5, r = H * 0.36;
+  drawTarget(cx, cy, r, 0.4);
+  const bs = (r / 150) * 1.1;
+  [0.3, 1.5, 2.6, 3.8, 4.7].forEach(a => stuckBlade(cx, cy, r, a, bs));
+  drawCrystal(cx + Math.cos(5.5) * r * 0.92, cy + Math.sin(5.5) * r * 0.92, 5.5 + Math.PI / 2, 2 * sq);
+  // flying blade with trail
+  for (let i = 0; i < 8; i++) {
+    g.fillStyle = 'rgba(125,249,255,' + (0.35 - i * 0.04) + ')';
+    g.fillRect(W * 0.42 - 5 * sq, H * 0.75 + i * 26 * sq, 10 * sq, 20 * sq);
+  }
+  drawBlade(W * 0.42, H * 0.72, -Math.PI / 2, 2.2 * sq, true);
+  // title
+  g.textAlign = 'left'; g.textBaseline = 'middle';
+  g.shadowColor = 'rgba(125,249,255,0.9)'; g.shadowBlur = 34 * sq;
+  g.fillStyle = '#ffffff';
+  g.font = '900 ' + (160 * sq) + 'px "Segoe UI", Arial, sans-serif';
+  g.fillText('BLADE', W * 0.05, H * 0.36);
+  g.fillText('RUSH', W * 0.05, H * 0.52);
+  g.shadowBlur = 0;
+  g.fillStyle = '#ffe14d';
+  g.font = '700 ' + (46 * sq) + 'px "Segoe UI", Arial, sans-serif';
+  g.fillText('Throw. Stick. Don\u2019t clash!', W * 0.052, H * 0.65);
+} else {
+  // 1:1 — disc top, title bottom
+  const cx = W * 0.5, cy = H * 0.36, r = W * 0.28;
+  drawTarget(cx, cy, r, 0.2);
+  const bs = (r / 150) * 1.0;
+  [0.8, 2.0, 3.1, 4.3].forEach(a => stuckBlade(cx, cy, r, a, bs));
+  drawCrystal(cx + Math.cos(5.6) * r * 0.92, cy + Math.sin(5.6) * r * 0.92, 5.6 + Math.PI / 2, 1.8 * sq);
+  drawBlade(W * 0.5, H * 0.82, -Math.PI / 2, 2.0 * sq, true);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.shadowColor = 'rgba(125,249,255,0.9)'; g.shadowBlur = 30 * sq;
+  g.fillStyle = '#ffffff';
+  g.font = '900 ' + (130 * sq) + 'px "Segoe UI", Arial, sans-serif';
+  g.fillText('BLADE RUSH', W * 0.5, H * 0.68);
+  g.shadowBlur = 0;
+}
+document.title = 'ready';
+</script>
+</body>
+</html>
