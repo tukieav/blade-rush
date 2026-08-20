@@ -27,9 +27,13 @@ FEATURES
 - Combo multiplier for rapid consecutive hits
 - Break the whole target apart when you land every blade
 - Unpredictable rotation on higher levels: speed-ups, stops, direction flips
-- Epic BOSS targets every 5 levels — bigger, tougher, shinier
+- 8 unique BOSS targets every 5 levels — collect them all in the Boss Gallery
+- ARMORY: 12 unlockable blade skins (jagged, curved, prism…) bought with shards
+- Earn ◆ shards from crystals, level clears and missions — progress saves in the cloud
+- 11 missions with shard rewards, daily login streak bonus
 - Second chance: watch an ad to continue right where you failed
-- Your best score is saved across devices
+- Double your shard haul with a rewarded ad after each run
+- Your best score, shards and unlocks are saved across devices
 
 HOW TO PLAY
 1. Watch the target spin
@@ -49,10 +53,11 @@ Click / tap / Space — throw blade.
 - loadingStart/loadingStop around boot
 - Midgame ad on "Play Again" after game over
 - Rewarded ad "Continue" (resume level from death point, once per run)
-- happytime() on boss defeats
+- Rewarded ad "x2 shards" on game over screen (doubles run currency, once per run)
+- happytime() on boss defeats, blade unlocks and mission completions (self-throttled 2s)
 - game.settings.muteAudio respected + settings change listener
-- Best score via data module with localStorage fallback
-- No external requests, all assets procedural, bundle ~16 KB
+- Best score + full meta-progression (shards, skins, boss gallery, missions, daily streak) via data module with localStorage fallback
+- No external requests, all assets procedural, bundle ~30 KB
 - Touch + mouse + keyboard; portrait-friendly, works on low-end devices
 - Live demo: https://tukieav.github.io/blade-rush/
 
