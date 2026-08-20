@@ -107,3 +107,29 @@ export function uiSound() {
   ensureCtx();
   tone(660, 0.08, 'sine', 0.15, 0, 1.2);
 }
+
+// Level cleared (non-boss) — short rising fanfare
+export function levelUpSound() {
+  ensureCtx();
+  [523, 659, 784].forEach((f, i) => tone(f, 0.22, 'triangle', 0.2, i * 0.07));
+}
+
+// Shards gained — soft coin blip
+export function shardSound() {
+  ensureCtx();
+  tone(988, 0.1, 'sine', 0.16, 0, 1.4);
+  tone(1319, 0.12, 'sine', 0.12, 0.05, 1.3);
+}
+
+// Blade purchased/equipped — power-up sweep
+export function buySound() {
+  ensureCtx();
+  [392, 523, 659, 880].forEach((f, i) => tone(f, 0.2, 'triangle', 0.2, i * 0.05));
+  noise(0.12, 0.1, 0.1, 3000);
+}
+
+// Mission complete — triumphant chime
+export function missionSound() {
+  ensureCtx();
+  [659, 880, 1047, 1319].forEach((f, i) => tone(f, 0.3, 'triangle', 0.22, i * 0.08));
+}

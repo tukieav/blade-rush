@@ -2,6 +2,7 @@
 // All assets procedural (Canvas 2D + WebAudio). No engine, own angular kinematics.
 import * as SDK from './sdk.js';
 import * as AU from './audio.js';
+import * as META from './meta.js';
 
 const GAME_W = 540, GAME_H = 960;
 const CX = 270, TARGET_Y = 300;
@@ -14,13 +15,14 @@ const canvas = document.getElementById('game');
 const g = canvas.getContext('2d');
 
 // ---------- state ----------
-let state = 'menu'; // menu | playing | throwing | break | dying | gameover
+let state = 'menu'; // menu | playing | throwing | break | dying | gameover | shop | bosses | missions
 let level = 1, score = 0, best = 0;
 let combo = 0, comboTimer = 0;
 let stuck = [];        // [{rel}]  relative angles on target
 let crystals = [];     // [{rel, alive}]
 let bladesLeft = 0, bladesTotal = 0;
 let targetAngle = 0, baseSpeed = 1.4, dirSign = 1, patternT = 0, irregular = false, boss = false;
+let bossInfo = null;   // current boss variant from META.BOSSES
 let targetR = 150;
 let throwY = 0;        // tip y of flying blade
 let readyBlade = true;
@@ -29,17 +31,25 @@ let pieces = [];       // breaking target chunks
 let particles = [];
 let floats = [];
 let trail = [];
+let toasts = [];       // [{txt, sub, t, color}] top banners (missions, daily)
 let shake = 0, shakeX = 0, shakeY = 0;
 let breakT = 0, dieT = 0, flashT = 0;
 let continueUsed = false, canContinue = false;
 let deathSnapshot = null;
 let time = 0;
 let muted = false;
+let runTime = 0;       // seconds since run start (dynamic difficulty)
+let runShards = 0;     // shards earned this run (for x2 ad)
+let runBosses = 0;     // bosses killed this run
+let x2Used = false;
+let hintT = 0;         // contextual hint timer (first-session teaching)
+let shopScroll = 0;
 
 // ---------- levels ----------
 function isBoss(lv) { return lv % 5 === 0; }
 function setupLevel(lv) {
   boss = isBoss(lv);
+  bossInfo = boss ? META.bossForLevel(lv) : null;
   targetR = boss ? 190 : 150;
   stuck = [];
   crystals = [];
@@ -70,21 +80,40 @@ function angDist(a, b) {
 }
 function norm(a) { a %= Math.PI * 2; return a < 0 ? a + Math.PI * 2 : a; }
 
-// ---------- rotation ----------
+// ---------- rotation (dynamic difficulty: gentler first minute of a run) ----------
 function angVel(dt) {
   patternT += dt;
-  if (!irregular) return baseSpeed * dirSign;
+  const ease = 0.72 + 0.28 * Math.min(runTime / 60, 1); // 72% speed at start -> 100% after 60s
+  if (!irregular || runTime < 45) return baseSpeed * ease * dirSign;
   // sinusoidal acceleration, momentary stops, direction flips
   const s = Math.sin(patternT * 0.9) + 0.55 * Math.sin(patternT * 2.3 + 1.7);
-  return baseSpeed * dirSign * s * 1.1;
+  return baseSpeed * ease * dirSign * s * 1.1;
+}
+
+// ---------- shards ----------
+function gainShards(n, x, y) {
+  runShards += n;
+  META.addShards(n);
+  addFloat('+' + n + ' \u25C6', x, y, '#7df9ff');
+  AU.shardSound();
+}
+function onMissions(done) {
+  for (const m of done) {
+    toasts.push({ txt: 'MISSION COMPLETE', sub: m.desc + '  +' + m.reward + ' \u25C6', t: 0, color: '#7dff8a' });
+    AU.missionSound();
+    SDK.happytime();
+  }
 }
 
 // ---------- actions ----------
 function startGame() {
   level = 1; score = 0; combo = 0; comboTimer = 0;
   continueUsed = false;
+  runTime = 0; runShards = 0; runBosses = 0; x2Used = false;
+  hintT = META.M.stats.runs < 2 ? 6 : 0; // contextual hint for brand-new players
   setupLevel(level);
   state = 'playing';
+  onMissions(META.bump('runs', 1));
   SDK.gameplayStart();
   AU.unlockAudio();
 }
@@ -95,6 +124,7 @@ function throwBlade() {
   state = 'throwing';
   throwY = GAME_H - 60; // tip position
   trail = [];
+  hintT = 0;
   AU.throwSound();
 }
 
@@ -111,6 +141,8 @@ function impact() {
       const bonus = 50 * Math.max(1, combo);
       score += bonus;
       addFloat('+' + bonus, CX, TARGET_Y + targetR, '#7df9ff');
+      gainShards(META.perk() === 'crystal' ? 3 : 2, CX, TARGET_Y + targetR + 34);
+      onMissions(META.bump('crystals', 1));
       crystalParticles(rel);
       AU.crystalSound();
     }
@@ -120,6 +152,9 @@ function impact() {
   bladesLeft--;
   combo++;
   comboTimer = 1.6;
+  const doneCombo = META.bump('bestCombo', combo, true);
+  const doneThrows = META.bump('throws', 1);
+  onMissions(doneCombo.concat(doneThrows));
   const pts = 10 * combo;
   score += pts;
   addFloat('+' + pts + (combo > 1 ? '  x' + combo : ''), CX, TARGET_Y + targetR + 60, '#ffe14d');
@@ -142,6 +177,7 @@ function breakTarget() {
   AU.breakSound();
   pieces = [];
   const n = boss ? 10 : 7;
+  const metal = bossInfo ? bossInfo.metal : null;
   for (let i = 0; i < n; i++) {
     const a = (i / n) * Math.PI * 2 + Math.random() * 0.4;
     const sp = 260 + Math.random() * 320;
@@ -149,7 +185,7 @@ function breakTarget() {
       x: CX, y: TARGET_Y,
       vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 150,
       rot: Math.random() * Math.PI * 2, vr: (Math.random() - 0.5) * 12,
-      a0: a, size: targetR * (0.35 + Math.random() * 0.3), boss,
+      a0: a, size: targetR * (0.35 + Math.random() * 0.3), boss, metal,
     });
   }
   // stuck blades fly off too
@@ -165,7 +201,16 @@ function breakTarget() {
   const lvBonus = (boss ? 500 : 100) * level;
   score += lvBonus;
   addFloat((boss ? 'BOSS DOWN! +' : 'LEVEL CLEAR! +') + lvBonus, CX, TARGET_Y, boss ? '#ff5df1' : '#7dff8a');
-  if (boss) { AU.bossSound(); SDK.happytime(); }
+  const lvShards = (boss ? 10 : 3) + (META.perk() === 'level' ? 2 : 0);
+  gainShards(lvShards, CX, TARGET_Y + 46);
+  if (boss) {
+    AU.bossSound(); SDK.happytime();
+    runBosses++;
+    onMissions(META.recordBossKill(bossInfo.id));
+    onMissions(META.bump('bestBossRun', runBosses, true));
+  } else {
+    AU.levelUpSound();
+  }
 }
 
 function startDeath() {
@@ -184,6 +229,7 @@ function doGameOver() {
   AU.gameOverSound();
   const total = level * 1000 + score;
   if (total > best) { best = total; SDK.saveBest(best); }
+  onMissions(META.bump('bestLevel', level, true));
 }
 
 async function tryContinue() {
@@ -202,6 +248,21 @@ async function tryContinue() {
     state = 'playing';
     SDK.gameplayStart();
     addFloat('CONTINUE!', CX, GAME_H * 0.5, '#7dff8a');
+  }
+}
+
+async function tryDouble() {
+  if (x2Used || runShards <= 0) return;
+  x2Used = true;
+  const ok = await SDK.requestAd('rewarded', {
+    onStart: () => { AU.setMuted(true); },
+    onFinish: () => { AU.setMuted(muted); },
+  });
+  if (ok || !SDK.sdkAvailable()) {
+    META.addShards(runShards);
+    toasts.push({ txt: 'SHARDS DOUBLED', sub: '+' + runShards + ' \u25C6', t: 0, color: '#7df9ff' });
+    runShards *= 2;
+    AU.buySound();
   }
 }
 
@@ -242,9 +303,11 @@ function burstParticles(x, y, n) {
 function update(dt) {
   time += dt;
   if (state === 'playing' || state === 'throwing' || state === 'break') {
+    runTime += dt;
     targetAngle = norm(targetAngle + angVel(dt) * dt);
   }
   if (comboTimer > 0) { comboTimer -= dt; if (comboTimer <= 0) combo = 0; }
+  if (hintT > 0 && state === 'playing') hintT -= dt;
 
   if (state === 'throwing') {
     throwY -= THROW_SPEED * dt;
@@ -260,7 +323,8 @@ function update(dt) {
       level++;
       setupLevel(level);
       state = 'playing';
-      addFloat(boss ? 'BOSS FIGHT!' : 'LEVEL ' + level, CX, TARGET_Y - targetR - 40, boss ? '#ff5df1' : '#ffffff');
+      addFloat(boss ? 'BOSS FIGHT!' : 'LEVEL ' + level, CX, TARGET_Y - targetR - 40, boss ? (bossInfo ? bossInfo.rim : '#ff5df1') : '#ffffff');
+      if (boss && bossInfo) addFloat(bossInfo.name, CX, TARGET_Y - targetR - 4, bossInfo.rim);
     }
   }
   if (state === 'dying') {
@@ -279,6 +343,8 @@ function update(dt) {
   floats = floats.filter(f => f.t < 1.2);
   for (const t of trail) t.t += dt;
   trail = trail.filter(t => t.t < 0.25);
+  for (const t of toasts) t.t += dt;
+  toasts = toasts.filter(t => t.t < 3.2);
 
   if (shake > 0) {
     shake = Math.max(0, shake - dt * 60);
@@ -288,13 +354,14 @@ function update(dt) {
 }
 
 // ---------- draw ----------
-let woodCache = null, bossCache = null;
-function targetTexture(r, isBoss) {
+let woodCache = null;
+const bossCaches = new Map();
+function targetTexture(r, bossDef) {
   const c = document.createElement('canvas');
   c.width = c.height = r * 2 + 8;
   const t = c.getContext('2d');
   t.translate(r + 4, r + 4);
-  if (!isBoss) {
+  if (!bossDef) {
     // wooden disc with grain rings
     const grad = t.createRadialGradient(0, 0, 8, 0, 0, r);
     grad.addColorStop(0, '#a06a38'); grad.addColorStop(0.7, '#7d4e26'); grad.addColorStop(1, '#5c3618');
@@ -312,9 +379,10 @@ function targetTexture(r, isBoss) {
       t.lineTo(Math.cos(a + 0.15) * r * 0.92, Math.sin(a + 0.15) * r * 0.92); t.stroke();
     }
   } else {
-    // boss: dark metal panels
+    // boss: dark metal panels tinted per boss variant
+    const m = bossDef.metal;
     const grad = t.createRadialGradient(-r * 0.3, -r * 0.3, 10, 0, 0, r);
-    grad.addColorStop(0, '#5a6a80'); grad.addColorStop(0.6, '#38455a'); grad.addColorStop(1, '#222c3d');
+    grad.addColorStop(0, m[0]); grad.addColorStop(0.6, m[1]); grad.addColorStop(1, m[2]);
     t.fillStyle = grad; t.beginPath(); t.arc(0, 0, r, 0, Math.PI * 2); t.fill();
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
@@ -325,26 +393,56 @@ function targetTexture(r, isBoss) {
       const rr = r * 0.8;
       t.beginPath(); t.arc(Math.cos(a + 0.39) * rr, Math.sin(a + 0.39) * rr, 4, 0, Math.PI * 2); t.fill();
     }
-    t.strokeStyle = 'rgba(255,93,241,0.5)'; t.lineWidth = 4;
+    t.strokeStyle = bossDef.rim; t.globalAlpha = 0.5; t.lineWidth = 4;
     t.beginPath(); t.arc(0, 0, r * 0.45, 0, Math.PI * 2); t.stroke();
+    t.globalAlpha = 1;
   }
   return c;
 }
+function bossTexture(bossDef, r) {
+  const key = bossDef.id + ':' + r;
+  if (!bossCaches.has(key)) bossCaches.set(key, targetTexture(r, bossDef));
+  return bossCaches.get(key);
+}
 
-function drawBlade(x, y, rot, scale = 1, glow = true) {
+function prismColor(off = 0) {
+  return 'hsl(' + (((time * 90 + off) % 360) | 0) + ',100%,70%)';
+}
+
+function drawBlade(x, y, rot, scale = 1, glow = true, skin = null) {
+  const B = skin || META.equippedBlade();
+  const glowC = B.glow === 'prism' ? prismColor() : B.glow;
   g.save(); g.translate(x, y); g.rotate(rot + Math.PI / 2); g.scale(scale, scale);
-  // rot points along blade direction (tip forward). Draw tip at (0,-L/2)... we draw blade pointing up.
-  const L = BLADE_LEN, W = BLADE_W;
-  if (glow) { g.shadowColor = '#7df9ff'; g.shadowBlur = 14; }
+  const L = BLADE_LEN, W = BLADE_W * (B.shape === 'wide' ? 1.35 : B.shape === 'slim' ? 0.72 : 1);
+  if (glow) { g.shadowColor = glowC; g.shadowBlur = 14; }
   // energy blade
   const grad = g.createLinearGradient(0, -L * 0.55, 0, L * 0.1);
-  grad.addColorStop(0, '#e8ffff'); grad.addColorStop(0.5, '#7df9ff'); grad.addColorStop(1, '#2b8fd4');
+  if (B.glow === 'prism') {
+    grad.addColorStop(0, '#ffffff'); grad.addColorStop(0.5, prismColor()); grad.addColorStop(1, prismColor(120));
+  } else {
+    grad.addColorStop(0, B.edge[0]); grad.addColorStop(0.5, B.edge[1]); grad.addColorStop(1, B.edge[2]);
+  }
   g.fillStyle = grad;
   g.beginPath();
-  g.moveTo(0, -L * 0.58);
-  g.quadraticCurveTo(W * 0.55, -L * 0.2, W * 0.4, L * 0.05);
-  g.lineTo(-W * 0.4, L * 0.05);
-  g.quadraticCurveTo(-W * 0.55, -L * 0.2, 0, -L * 0.58);
+  if (B.shape === 'jagged') {
+    g.moveTo(0, -L * 0.58);
+    g.lineTo(W * 0.5, -L * 0.34); g.lineTo(W * 0.28, -L * 0.26);
+    g.lineTo(W * 0.52, -L * 0.1); g.lineTo(W * 0.4, L * 0.05);
+    g.lineTo(-W * 0.4, L * 0.05); g.lineTo(-W * 0.52, -L * 0.1);
+    g.lineTo(-W * 0.28, -L * 0.26); g.lineTo(-W * 0.5, -L * 0.34);
+    g.closePath();
+  } else if (B.shape === 'curved') {
+    g.moveTo(0, -L * 0.58);
+    g.bezierCurveTo(W * 0.9, -L * 0.35, -W * 0.1, -L * 0.15, W * 0.4, L * 0.05);
+    g.lineTo(-W * 0.4, L * 0.05);
+    g.bezierCurveTo(-W * 0.7, -L * 0.25, W * 0.1, -L * 0.4, 0, -L * 0.58);
+    g.closePath();
+  } else {
+    g.moveTo(0, -L * 0.58);
+    g.quadraticCurveTo(W * 0.55, -L * 0.2, W * 0.4, L * 0.05);
+    g.lineTo(-W * 0.4, L * 0.05);
+    g.quadraticCurveTo(-W * 0.55, -L * 0.2, 0, -L * 0.58);
+  }
   g.fill();
   g.shadowBlur = 0;
   // core line
@@ -357,7 +455,7 @@ function drawBlade(x, y, rot, scale = 1, glow = true) {
   hg.addColorStop(0, '#3a4a66'); hg.addColorStop(1, '#141c2c');
   g.fillStyle = hg;
   g.fillRect(-W * 0.3, L * 0.1, W * 0.6, L * 0.34);
-  g.fillStyle = '#ff5df1';
+  g.fillStyle = B.gem;
   g.fillRect(-W * 0.3, L * 0.42, W * 0.6, W * 0.28);
   g.restore();
 }
@@ -396,14 +494,14 @@ function drawBG() {
 }
 
 function drawTarget() {
-  if (!woodCache) woodCache = targetTexture(150, false);
-  if (!bossCache) bossCache = targetTexture(190, true);
-  const tex = boss ? bossCache : woodCache;
+  if (!woodCache) woodCache = targetTexture(150, null);
+  const tex = boss && bossInfo ? bossTexture(bossInfo, 190) : woodCache;
+  const rim = boss && bossInfo ? bossInfo.rim : '#7df9ff';
   g.save();
   g.translate(CX, TARGET_Y);
   // neon rim glow
-  g.shadowColor = boss ? '#ff5df1' : '#7df9ff'; g.shadowBlur = 24;
-  g.strokeStyle = boss ? '#ff5df1' : '#7df9ff'; g.lineWidth = 5;
+  g.shadowColor = rim; g.shadowBlur = 24;
+  g.strokeStyle = rim; g.lineWidth = 5;
   g.beginPath(); g.arc(0, 0, targetR + 4, 0, Math.PI * 2); g.stroke();
   g.shadowBlur = 0;
   g.rotate(targetAngle);
@@ -412,9 +510,6 @@ function drawTarget() {
   // stuck blades (handles sticking out, rotating with target)
   for (const b of stuck) {
     const wa = targetAngle + b.rel;
-    const bx = CX + Math.cos(wa) * (targetR + BLADE_LEN * 0.18);
-    const by = TARGET_Y + Math.sin(wa) * (targetR + BLADE_LEN * 0.18);
-    // blade points INTO the target => direction of tip = towards center = wa+PI
     drawBladeStuck(wa);
   }
   // crystals on rim
@@ -428,12 +523,20 @@ function drawTarget() {
 }
 
 function drawBladeStuck(wa) {
-  // stuck depth: tip inside disc; handle sticks out along wa
   const depth = 30; // how deep tip is inside
   const cx = CX + Math.cos(wa) * (targetR - depth + BLADE_LEN * 0.58);
   const cy = TARGET_Y + Math.sin(wa) * (targetR - depth + BLADE_LEN * 0.58);
-  // drawBlade draws pointing up with rot+PI/2 rotation; tip direction should be -wa direction (towards center)
   drawBlade(cx, cy, wa + Math.PI, 1, false);
+}
+
+function drawShardCounter(x, y, n, align = 'right') {
+  g.save();
+  g.textAlign = align; g.textBaseline = 'top';
+  g.font = '700 20px "Segoe UI", sans-serif';
+  g.shadowColor = '#7df9ff'; g.shadowBlur = 8;
+  g.fillStyle = '#7df9ff';
+  g.fillText('\u25C6 ' + n, x, y);
+  g.restore();
 }
 
 function drawHUD() {
@@ -442,18 +545,34 @@ function drawHUD() {
   g.font = '800 44px "Segoe UI", sans-serif';
   g.fillText(String(score), CX, 18);
   g.font = '600 20px "Segoe UI", sans-serif';
-  g.fillStyle = 'rgba(255,255,255,0.65)';
-  g.fillText((boss ? 'BOSS — LEVEL ' : 'LEVEL ') + level, CX, 68);
+  g.fillStyle = boss && bossInfo ? bossInfo.rim : 'rgba(255,255,255,0.65)';
+  g.fillText(boss && bossInfo ? bossInfo.name + ' — LEVEL ' + level : 'LEVEL ' + level, CX, 68);
+  // boss progress counter
+  if (!boss) {
+    const toBoss = 5 - (level % 5);
+    g.fillStyle = 'rgba(255,93,241,0.75)';
+    g.font = '700 16px "Segoe UI", sans-serif';
+    g.fillText('BOSS IN ' + toBoss, CX, 94);
+  }
   g.textAlign = 'left';
   g.fillStyle = 'rgba(255,255,255,0.5)';
   g.font = '600 16px "Segoe UI", sans-serif';
   g.fillText('BEST ' + best, 14, 20);
+  drawShardCounter(GAME_W - 14, 20, META.M.shards);
   // combo
   if (combo > 1 && comboTimer > 0) {
     g.textAlign = 'center';
     g.fillStyle = '#ffe14d';
     g.font = '800 ' + (26 + Math.min(combo, 8) * 2) + 'px "Segoe UI", sans-serif';
-    g.fillText('COMBO x' + combo, CX, 100);
+    g.fillText('COMBO x' + combo, CX, 118);
+  }
+  // contextual first-play hint
+  if (hintT > 0 && state === 'playing') {
+    g.textAlign = 'center';
+    g.globalAlpha = Math.min(1, hintT);
+    g.fillStyle = '#ffffff'; g.font = '700 22px "Segoe UI", sans-serif';
+    g.fillText('TAP to throw — aim for a gap!', CX, GAME_H - 200);
+    g.globalAlpha = 1;
   }
   // blade icons counter (left side)
   for (let i = 0; i < bladesTotal; i++) {
@@ -463,6 +582,27 @@ function drawHUD() {
     g.globalAlpha = used ? 0.22 : 1;
     drawBlade(0, 0, -Math.PI / 2, 1, !used);
     g.restore(); g.globalAlpha = 1;
+  }
+}
+
+function drawToasts() {
+  let y = 150;
+  for (const t of toasts) {
+    const a = t.t < 0.25 ? t.t / 0.25 : t.t > 2.7 ? Math.max(0, 1 - (t.t - 2.7) / 0.5) : 1;
+    g.save(); g.globalAlpha = a;
+    g.shadowColor = t.color; g.shadowBlur = 16;
+    g.fillStyle = 'rgba(14,20,38,0.94)';
+    roundRect(CX - 190, y, 380, 62, 12); g.fill();
+    g.shadowBlur = 0;
+    g.strokeStyle = t.color; g.lineWidth = 2;
+    roundRect(CX - 190, y, 380, 62, 12); g.stroke();
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillStyle = t.color; g.font = '800 20px "Segoe UI", sans-serif';
+    g.fillText(t.txt, CX, y + 20);
+    g.fillStyle = '#ffffff'; g.font = '600 16px "Segoe UI", sans-serif';
+    g.fillText(t.sub, CX, y + 44);
+    g.restore();
+    y += 74;
   }
 }
 
@@ -486,10 +626,144 @@ function roundRect(x, y, w, h, r) {
 }
 
 const BTN = {
-  play: { x: CX, y: 640, w: 260, h: 74 },
-  continue: { x: CX, y: 560, w: 320, h: 70 },
-  again: { x: CX, y: 660, w: 300, h: 70 },
+  play: { x: CX, y: 620, w: 260, h: 74 },
+  shop: { x: 110, y: 720, w: 170, h: 54 },
+  bosses: { x: 285, y: 720, w: 160, h: 54 },
+  missions: { x: 452, y: 720, w: 155, h: 54 },
+  continue: { x: CX, y: 520, w: 320, h: 66 },
+  x2: { x: CX, y: 604, w: 320, h: 60 },
+  again: { x: CX, y: 686, w: 300, h: 66 },
+  back: { x: 80, y: 46, w: 120, h: 52 },
 };
+
+// shop grid geometry (3 cols x 4 rows)
+function shopCell(i) {
+  const col = i % 3, row = Math.floor(i / 3);
+  return { x: 96 + col * 174, y: 210 + row * 178, w: 158, h: 162 };
+}
+
+function drawShop() {
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.shadowColor = '#7df9ff'; g.shadowBlur = 18;
+  g.fillStyle = '#ffffff'; g.font = '900 44px "Segoe UI", sans-serif';
+  g.fillText('ARMORY', CX, 60);
+  g.shadowBlur = 0;
+  drawShardCounter(GAME_W - 18, 34, META.M.shards);
+  drawButton(BTN.back.x, BTN.back.y, BTN.back.w, BTN.back.h, '\u2190 BACK', '#8899b0', true);
+  for (let i = 0; i < META.BLADES.length; i++) {
+    const b = META.BLADES[i];
+    const c = shopCell(i);
+    const owned = META.M.owned.includes(b.id);
+    const eq = META.M.equipped === b.id;
+    const afford = META.M.shards >= b.cost;
+    const color = eq ? '#7dff8a' : owned ? '#7df9ff' : afford ? '#ffe14d' : '#3a4a66';
+    g.save();
+    g.shadowColor = color; g.shadowBlur = eq ? 16 : 8;
+    g.fillStyle = 'rgba(14,20,38,0.92)';
+    roundRect(c.x - c.w / 2, c.y - c.h / 2, c.w, c.h, 12); g.fill();
+    g.shadowBlur = 0;
+    g.strokeStyle = color; g.lineWidth = eq ? 3 : 2;
+    roundRect(c.x - c.w / 2, c.y - c.h / 2, c.w, c.h, 12); g.stroke();
+    g.restore();
+    drawBlade(c.x, c.y - 14, -Math.PI / 2, 0.72, true, b);
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillStyle = '#ffffff'; g.font = '700 13px "Segoe UI", sans-serif';
+    g.fillText(b.name, c.x, c.y + 44);
+    g.font = '600 12px "Segoe UI", sans-serif';
+    if (eq) { g.fillStyle = '#7dff8a'; g.fillText('EQUIPPED', c.x, c.y + 62); }
+    else if (owned) { g.fillStyle = '#7df9ff'; g.fillText('TAP TO EQUIP', c.x, c.y + 62); }
+    else { g.fillStyle = afford ? '#ffe14d' : 'rgba(255,255,255,0.4)'; g.fillText('\u25C6 ' + b.cost, c.x, c.y + 62); }
+    if (b.perk) {
+      g.fillStyle = '#ff5df1'; g.font = '600 10px "Segoe UI", sans-serif';
+      g.fillText(META.PERK_TEXT[b.perk], c.x, c.y - 66);
+    }
+  }
+  g.fillStyle = 'rgba(255,255,255,0.55)'; g.font = '600 16px "Segoe UI", sans-serif';
+  g.textAlign = 'center';
+  g.fillText('Earn \u25C6 shards from crystals, levels and missions', CX, GAME_H - 34);
+}
+
+function drawBossGallery() {
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.shadowColor = '#ff5df1'; g.shadowBlur = 18;
+  g.fillStyle = '#ffffff'; g.font = '900 44px "Segoe UI", sans-serif';
+  g.fillText('BOSS GALLERY', CX, 60);
+  g.shadowBlur = 0;
+  drawButton(BTN.back.x, BTN.back.y, BTN.back.w, BTN.back.h, '\u2190 BACK', '#8899b0', true);
+  g.fillStyle = 'rgba(255,255,255,0.6)'; g.font = '600 18px "Segoe UI", sans-serif';
+  g.fillText(META.M.bossesSeen.length + ' / ' + META.BOSSES.length + ' DEFEATED', CX, 108);
+  for (let i = 0; i < META.BOSSES.length; i++) {
+    const b = META.BOSSES[i];
+    const seen = META.M.bossesSeen.includes(b.id);
+    const col = i % 2, row = Math.floor(i / 2);
+    const x = 150 + col * 240, y = 220 + row * 185;
+    g.save();
+    if (seen) {
+      const tex = bossTexture(b, 190);
+      g.translate(x, y);
+      g.shadowColor = b.rim; g.shadowBlur = 14;
+      g.strokeStyle = b.rim; g.lineWidth = 3;
+      g.beginPath(); g.arc(0, 0, 62, 0, Math.PI * 2); g.stroke();
+      g.shadowBlur = 0;
+      g.beginPath(); g.arc(0, 0, 60, 0, Math.PI * 2); g.clip();
+      g.drawImage(tex, -60, -60, 120, 120);
+    } else {
+      g.translate(x, y);
+      g.strokeStyle = 'rgba(255,255,255,0.2)'; g.lineWidth = 2;
+      g.beginPath(); g.arc(0, 0, 60, 0, Math.PI * 2); g.stroke();
+      g.fillStyle = 'rgba(255,255,255,0.25)'; g.font = '900 44px "Segoe UI", sans-serif';
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText('?', 0, 2);
+    }
+    g.restore();
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillStyle = seen ? b.rim : 'rgba(255,255,255,0.35)';
+    g.font = '700 15px "Segoe UI", sans-serif';
+    g.fillText(seen ? b.name : '???', x, y + 82);
+  }
+  g.fillStyle = 'rgba(255,255,255,0.55)'; g.font = '600 16px "Segoe UI", sans-serif';
+  g.fillText('A new boss appears every 5 levels', CX, GAME_H - 34);
+}
+
+function drawMissions() {
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.shadowColor = '#ffe14d'; g.shadowBlur = 18;
+  g.fillStyle = '#ffffff'; g.font = '900 44px "Segoe UI", sans-serif';
+  g.fillText('MISSIONS', CX, 60);
+  g.shadowBlur = 0;
+  drawButton(BTN.back.x, BTN.back.y, BTN.back.w, BTN.back.h, '\u2190 BACK', '#8899b0', true);
+  drawShardCounter(GAME_W - 18, 34, META.M.shards);
+  let y = 132;
+  for (const m of META.MISSIONS) {
+    const done = META.M.missionsDone.includes(m.id);
+    const prog = META.missionProgress(m);
+    g.save();
+    g.fillStyle = 'rgba(14,20,38,0.9)';
+    roundRect(40, y, GAME_W - 80, 62, 10); g.fill();
+    g.strokeStyle = done ? '#7dff8a' : 'rgba(125,249,255,0.35)'; g.lineWidth = 2;
+    roundRect(40, y, GAME_W - 80, 62, 10); g.stroke();
+    g.textAlign = 'left'; g.textBaseline = 'middle';
+    g.fillStyle = done ? '#7dff8a' : '#ffffff'; g.font = '700 17px "Segoe UI", sans-serif';
+    g.fillText((done ? '\u2713 ' : '') + m.desc, 58, y + 20);
+    // progress bar
+    if (!done) {
+      g.fillStyle = 'rgba(255,255,255,0.12)';
+      roundRect(58, y + 38, 280, 12, 6); g.fill();
+      g.fillStyle = '#7df9ff';
+      if (prog > 0) { roundRect(58, y + 38, Math.max(12, 280 * prog / m.target), 12, 6); g.fill(); }
+      g.fillStyle = 'rgba(255,255,255,0.6)'; g.font = '600 13px "Segoe UI", sans-serif';
+      g.fillText(prog + ' / ' + m.target, 350, y + 44);
+    } else {
+      g.fillStyle = 'rgba(125,255,138,0.7)'; g.font = '600 13px "Segoe UI", sans-serif';
+      g.fillText('COMPLETE', 58, y + 44);
+    }
+    g.textAlign = 'right';
+    g.fillStyle = '#ffe14d'; g.font = '700 17px "Segoe UI", sans-serif';
+    g.fillText('\u25C6 ' + m.reward, GAME_W - 58, y + 31);
+    g.restore();
+    y += 72;
+  }
+}
 
 function draw() {
   g.save();
@@ -507,10 +781,26 @@ function draw() {
     g.fillText('RUSH', CX, 520 + 34);
     g.shadowBlur = 0;
     drawButton(BTN.play.x, BTN.play.y, BTN.play.w, BTN.play.h, 'PLAY', '#7df9ff');
+    drawButton(BTN.shop.x, BTN.shop.y, BTN.shop.w, BTN.shop.h, '\u2694 ARMORY', '#ffe14d', true);
+    drawButton(BTN.bosses.x, BTN.bosses.y, BTN.bosses.w, BTN.bosses.h, '\u25C9 BOSSES', '#ff5df1', true);
+    drawButton(BTN.missions.x, BTN.missions.y, BTN.missions.w, BTN.missions.h, '\u2605 QUESTS', '#7dff8a', true);
     g.fillStyle = 'rgba(255,255,255,0.6)'; g.font = '600 20px "Segoe UI", sans-serif';
-    g.fillText('Tap to throw. Don\u2019t hit other blades!', CX, 720);
-    g.fillText('BEST: ' + best, CX, 760);
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('Tap to throw. Don\u2019t hit other blades!', CX, 790);
+    g.fillText('BEST: ' + best, CX, 824);
+    drawShardCounter(GAME_W - 14, 20, META.M.shards);
+    if (META.M.streak.count > 1) {
+      g.fillStyle = '#ffe14d'; g.font = '700 18px "Segoe UI", sans-serif';
+      g.textAlign = 'left';
+      g.fillText('\u2600 DAY ' + META.M.streak.count + ' STREAK', 14, 26);
+    }
     drawBlade(CX, GAME_H - 60 - BLADE_LEN * 0.1, -Math.PI / 2, 1, true);
+  } else if (state === 'shop') {
+    drawShop();
+  } else if (state === 'bosses') {
+    drawBossGallery();
+  } else if (state === 'missions') {
+    drawMissions();
   } else if (state === 'playing' || state === 'throwing' || state === 'break' || state === 'dying') {
     if (state !== 'break') drawTarget();
     // breaking pieces
@@ -519,8 +809,8 @@ function draw() {
       g.save(); g.translate(p.x, p.y); g.rotate(p.rot);
       if (p.blade) { drawBlade(0, 0, -Math.PI / 2, 1, false); }
       else {
-        g.fillStyle = p.boss ? '#38455a' : '#7d4e26';
-        g.strokeStyle = p.boss ? '#8899b0' : '#5c3618'; g.lineWidth = 3;
+        g.fillStyle = p.metal ? p.metal[1] : '#7d4e26';
+        g.strokeStyle = p.metal ? '#8899b0' : '#5c3618'; g.lineWidth = 3;
         g.beginPath();
         g.moveTo(-p.size * 0.5, -p.size * 0.3); g.lineTo(p.size * 0.5, -p.size * 0.4);
         g.lineTo(p.size * 0.4, p.size * 0.4); g.lineTo(-p.size * 0.35, p.size * 0.35);
@@ -530,10 +820,13 @@ function draw() {
     }
     // flying blade + trail
     if (state === 'throwing') {
+      const B = META.equippedBlade();
+      const trailC = B.glow === 'prism' ? prismColor() : B.glow;
       for (const t of trail) {
         const a = 1 - t.t / 0.25;
-        g.fillStyle = 'rgba(125,249,255,' + (a * 0.35) + ')';
+        g.save(); g.globalAlpha = a * 0.35; g.fillStyle = trailC;
         g.fillRect(CX - 4 * a, t.y + BLADE_LEN * 0.3, 8 * a, 26);
+        g.restore();
       }
       drawBlade(CX, throwY + BLADE_LEN * 0.58, -Math.PI / 2, 1, true);
     }
@@ -552,14 +845,17 @@ function draw() {
     g.textAlign = 'center'; g.textBaseline = 'middle';
     g.shadowColor = '#ff5df1'; g.shadowBlur = 24;
     g.fillStyle = '#ffffff'; g.font = '900 62px "Segoe UI", sans-serif';
-    g.fillText('GAME OVER', CX, 300);
+    g.fillText('GAME OVER', CX, 280);
     g.shadowBlur = 0;
     g.font = '700 30px "Segoe UI", sans-serif';
-    g.fillText('Level ' + level + '   •   Score ' + score, CX, 380);
+    g.fillText('Level ' + level + '   •   Score ' + score, CX, 356);
     g.fillStyle = 'rgba(255,255,255,0.65)'; g.font = '600 22px "Segoe UI", sans-serif';
-    g.fillText('BEST: ' + best, CX, 424);
+    g.fillText('BEST: ' + best, CX, 398);
+    g.fillStyle = '#7df9ff'; g.font = '700 24px "Segoe UI", sans-serif';
+    g.fillText('\u25C6 ' + runShards + ' shards earned', CX, 440);
     if (canContinue) drawButton(BTN.continue.x, BTN.continue.y, BTN.continue.w, BTN.continue.h, '\u25B6 CONTINUE (AD)', '#7dff8a', true);
-    drawButton(BTN.again.x, BTN.again.y, BTN.again.w, BTN.again.h, 'PLAY AGAIN', '#7df9ff', true);
+    if (!x2Used && runShards > 0) drawButton(BTN.x2.x, BTN.x2.y, BTN.x2.w, BTN.x2.h, '\u25C6 x2 SHARDS (AD)', '#7df9ff', true);
+    drawButton(BTN.again.x, BTN.again.y, BTN.again.w, BTN.again.h, 'PLAY AGAIN', '#ffe14d', true);
   }
 
   // particles
@@ -579,6 +875,7 @@ function draw() {
     g.fillText(f.txt, f.x, f.y - f.t * 60);
     g.globalAlpha = 1;
   }
+  drawToasts();
   if (flashT > 0) {
     g.fillStyle = 'rgba(255,255,255,' + (flashT * 3) + ')';
     g.fillRect(0, 0, GAME_W, GAME_H);
@@ -602,10 +899,32 @@ canvas.addEventListener('pointerdown', (e) => {
   const p = gamePos(e);
   if (state === 'menu') {
     if (inBtn(p, BTN.play)) { AU.uiSound(); startGame(); }
+    else if (inBtn(p, BTN.shop)) { AU.uiSound(); state = 'shop'; }
+    else if (inBtn(p, BTN.bosses)) { AU.uiSound(); state = 'bosses'; }
+    else if (inBtn(p, BTN.missions)) { AU.uiSound(); state = 'missions'; }
+  } else if (state === 'shop') {
+    if (inBtn(p, BTN.back)) { AU.uiSound(); state = 'menu'; return; }
+    for (let i = 0; i < META.BLADES.length; i++) {
+      const c = shopCell(i);
+      if (Math.abs(p.x - c.x) < c.w / 2 && Math.abs(p.y - c.y) < c.h / 2) {
+        const b = META.BLADES[i];
+        if (META.M.owned.includes(b.id)) {
+          if (META.equipBlade(b.id)) AU.uiSound();
+        } else if (META.buyBlade(b.id)) {
+          AU.buySound();
+          toasts.push({ txt: 'UNLOCKED', sub: b.name, t: 0, color: '#ffe14d' });
+          SDK.happytime();
+        }
+        break;
+      }
+    }
+  } else if (state === 'bosses' || state === 'missions') {
+    if (inBtn(p, BTN.back)) { AU.uiSound(); state = 'menu'; }
   } else if (state === 'playing') {
     throwBlade();
   } else if (state === 'gameover') {
     if (canContinue && inBtn(p, BTN.continue)) { AU.uiSound(); tryContinue(); }
+    else if (!x2Used && runShards > 0 && inBtn(p, BTN.x2)) { AU.uiSound(); tryDouble(); }
     else if (inBtn(p, BTN.again)) { AU.uiSound(); playAgain(); }
   }
 });
@@ -614,7 +933,9 @@ window.addEventListener('keydown', (e) => {
     AU.unlockAudio();
     if (state === 'menu') startGame();
     else if (state === 'playing') throwBlade();
+    else if (state === 'gameover') playAgain();
   }
+  if (e.code === 'Escape' && (state === 'shop' || state === 'bosses' || state === 'missions')) state = 'menu';
 });
 
 // ---------- resize ----------
@@ -643,9 +964,12 @@ function frame(ts) {
   await SDK.initSDK();
   SDK.loadingStart();
   best = SDK.loadBest();
+  META.load();
   muted = SDK.getMuteSetting();
   AU.setMuted(muted);
   SDK.onSettingsChange((s) => { muted = !!s.muteAudio; AU.setMuted(muted); });
+  const daily = META.checkDaily();
+  if (daily) toasts.push({ txt: 'DAILY BONUS — DAY ' + daily.day, sub: '+' + daily.reward + ' \u25C6 shards', t: 0, color: '#ffe14d' });
   setupLevel(1);
   SDK.loadingStop();
   requestAnimationFrame(frame);
@@ -655,9 +979,23 @@ function frame(ts) {
 if (new URLSearchParams(location.search).get('debug') === '1') {
   window.__astro = {
     forceGameOver: () => { if (state === 'playing' || state === 'throwing') startDeath(); dieT = 2; doGameOver(); },
-    getState: () => ({ state, level, score, bladesLeft, bladesTotal, combo, best, canContinue, continueUsed, stuck: stuck.length }),
+    getState: () => ({
+      state, level, score, bladesLeft, bladesTotal, combo, best, canContinue, continueUsed, stuck: stuck.length,
+      shards: META.M.shards, owned: META.M.owned.slice(), equipped: META.M.equipped,
+      bossesSeen: META.M.bossesSeen.slice(), missionsDone: META.M.missionsDone.slice(),
+      stats: { ...META.M.stats }, streak: { ...META.M.streak }, runShards, x2Used,
+    }),
     addScore: (n) => { score += n; },
+    addShards: (n) => { META.addShards(n); },
     throwNow: () => throwBlade(),
     winLevel: () => { if (state === 'playing') { bladesLeft = 0; breakTarget(); } },
+    setLevel: (n) => { level = n; setupLevel(n); state = 'playing'; },
+    buyBlade: (id) => META.buyBlade(id),
+    equipBlade: (id) => META.equipBlade(id),
+    openShop: () => { state = 'shop'; },
+    openBosses: () => { state = 'bosses'; },
+    openMissions: () => { state = 'missions'; },
+    goMenu: () => { state = 'menu'; },
+    resetMeta: () => { localStorage.removeItem('bladerush.meta'); },
   };
 }

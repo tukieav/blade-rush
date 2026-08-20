@@ -38,7 +38,12 @@ export function loadingStop() {
   try { if (sdk) sdk.game.loadingStop(); } catch (e) {}
 }
 
+let lastHappy = 0;
 export function happytime() {
+  // SDK throttles happytime() and logs a console.error if called too often — self-throttle to 2s
+  const now = Date.now();
+  if (now - lastHappy < 2000) return;
+  lastHappy = now;
   try { if (sdk) sdk.game.happytime(); } catch (e) {}
 }
 
@@ -78,4 +83,20 @@ export function loadBest() {
 export function saveBest(score) {
   try { if (sdk) sdk.data.setItem('bestScore', String(score)); } catch (e) {}
   try { localStorage.setItem('bladerush.best', String(score)); } catch (e) {}
+}
+
+// Generic persistent data: SDK data module (cloud, cross-device) + localStorage fallback
+export function loadData(key) {
+  try {
+    if (sdk) {
+      const v = sdk.data.getItem(key);
+      if (v != null) return v;
+    }
+  } catch (e) {}
+  try { return localStorage.getItem(key); } catch (e) { return null; }
+}
+
+export function saveData(key, value) {
+  try { if (sdk) sdk.data.setItem(key, value); } catch (e) {}
+  try { localStorage.setItem(key, value); } catch (e) {}
 }
