@@ -34,6 +34,10 @@ let trail = [];
 let toasts = [];       // [{txt, sub, t, color}] top banners (missions, daily)
 let shake = 0, shakeX = 0, shakeY = 0;
 let breakT = 0, dieT = 0, flashT = 0;
+let slowmo = 0;        // real-time seconds of slow motion left (blade-blade clash)
+let targetType = 'wood'; // wood | metal | energy (visual only)
+let ambient = [];      // ambient falling sparks in the arena
+let confetti = [];     // boss-defeat confetti pieces
 let continueUsed = false, canContinue = false;
 let deathSnapshot = null;
 let time = 0;
@@ -51,6 +55,7 @@ function setupLevel(lv) {
   boss = isBoss(lv);
   bossInfo = boss ? META.bossForLevel(lv) : null;
   targetR = boss ? 190 : 150;
+  targetType = boss ? 'boss' : (lv % 7 === 0 ? 'energy' : (lv % 3 === 0 ? 'metal' : 'wood'));
   stuck = [];
   crystals = [];
   bladesTotal = Math.min(5 + Math.floor(lv * 0.8), 12) + (boss ? 3 : 0);
@@ -148,7 +153,7 @@ function impact() {
     }
   }
   // stick!
-  stuck.push({ rel });
+  stuck.push({ rel, wob: 1, wt: 0 });
   bladesLeft--;
   combo++;
   comboTimer = 1.6;
@@ -160,6 +165,7 @@ function impact() {
   addFloat('+' + pts + (combo > 1 ? '  x' + combo : ''), CX, TARGET_Y + targetR + 60, '#ffe14d');
   shake = Math.min(4 + combo * 1.5, 16);
   splinterParticles();
+  sparkBurst(CX, TARGET_Y + targetR, 10 + combo * 2);
   AU.hitSound(combo);
   flashT = 0.06;
   if (bladesLeft <= 0) {
@@ -178,6 +184,10 @@ function breakTarget() {
   pieces = [];
   const n = boss ? 10 : 7;
   const metal = bossInfo ? bossInfo.metal : null;
+  let tex = null;
+  try {
+    tex = boss && bossInfo ? bossTexture(bossInfo, 190) : targetCaches.get(targetType + ':' + targetR);
+  } catch (e) {}
   for (let i = 0; i < n; i++) {
     const a = (i / n) * Math.PI * 2 + Math.random() * 0.4;
     const sp = 260 + Math.random() * 320;
@@ -185,7 +195,8 @@ function breakTarget() {
       x: CX, y: TARGET_Y,
       vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 150,
       rot: Math.random() * Math.PI * 2, vr: (Math.random() - 0.5) * 12,
-      a0: a, size: targetR * (0.35 + Math.random() * 0.3), boss, metal,
+      a0: a, size: targetR * (0.35 + Math.random() * 0.3), boss, metal, tex,
+      span: (Math.PI * 2 / n) * (0.85 + Math.random() * 0.3), r0: targetR,
     });
   }
   // stuck blades fly off too
@@ -206,6 +217,7 @@ function breakTarget() {
   if (boss) {
     AU.bossSound(); SDK.happytime();
     runBosses++;
+    confettiBurst(CX, TARGET_Y, 70);
     onMissions(META.recordBossKill(bossInfo.id));
     onMissions(META.bump('bestBossRun', runBosses, true));
   } else {
@@ -215,7 +227,10 @@ function breakTarget() {
 
 function startDeath() {
   AU.clangSound();
-  shake = 20;
+  shake = 26;
+  slowmo = 0.2;      // dramatic slow motion on blade-blade clash
+  flashT = 0.16;
+  clashBurst(CX, TARGET_Y + targetR);
   deadBlade = { x: CX, y: TARGET_Y + targetR + BLADE_LEN * 0.5, vx: (Math.random() - 0.5) * 300, vy: 350, rot: -Math.PI / 2, vr: 9 + Math.random() * 5 };
   deathSnapshot = { stuck: stuck.map(b => ({ ...b })), crystals: crystals.map(c => ({ ...c })), bladesLeft, level, targetAngle };
   state = 'dying';
@@ -281,7 +296,8 @@ function splinterParticles() {
   for (let i = 0; i < 14; i++) {
     const a = Math.PI / 2 + (Math.random() - 0.5) * 1.6;
     const sp = 120 + Math.random() * 260;
-    particles.push({ x: CX, y, vx: Math.cos(a) * sp * (Math.random() < 0.5 ? -1 : 1) * 0.4, vy: -Math.abs(Math.sin(a)) * sp, t: 0, life: 0.5 + Math.random() * 0.3, c: boss ? '#9fb4c8' : '#c8955f', s: 2 + Math.random() * 3 });
+    const col = boss || targetType === 'metal' ? '#9fb4c8' : targetType === 'energy' ? '#7df9ff' : '#c8955f';
+    particles.push({ x: CX, y, vx: Math.cos(a) * sp * (Math.random() < 0.5 ? -1 : 1) * 0.4, vy: -Math.abs(Math.sin(a)) * sp, t: 0, life: 0.5 + Math.random() * 0.3, c: col, s: 2 + Math.random() * 3, glow: targetType === 'energy' });
   }
 }
 function crystalParticles(rel) {
@@ -298,10 +314,50 @@ function burstParticles(x, y, n) {
     particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 100, t: 0, life: 0.7 + Math.random() * 0.6, c: ['#ffe14d', '#ff5df1', '#7df9ff', '#c8955f'][i % 4], s: 2 + Math.random() * 4, glow: i % 3 === 0 });
   }
 }
+// hot sparks on blade impact (bright, short-lived, streaky)
+function sparkBurst(x, y, n) {
+  for (let i = 0; i < n; i++) {
+    const a = -Math.PI / 2 + (Math.random() - 0.5) * 2.4;
+    const sp = 220 + Math.random() * 420;
+    particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, t: 0, life: 0.25 + Math.random() * 0.3, c: i % 3 === 0 ? '#ffffff' : '#ffd24d', s: 1.5 + Math.random() * 2, glow: true, streak: true });
+  }
+}
+// blade-blade clash: huge white flash + metal shards flying
+function clashBurst(x, y) {
+  for (let i = 0; i < 34; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 180 + Math.random() * 620;
+    particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 120, t: 0, life: 0.4 + Math.random() * 0.5, c: i % 4 === 0 ? '#ffffff' : i % 4 === 1 ? '#ffd24d' : i % 4 === 2 ? '#aab6cc' : '#ff8a5d', s: 2 + Math.random() * 3.5, glow: true, streak: i % 2 === 0 });
+  }
+}
+// boss defeat confetti (colored rectangles with spin + drag)
+function confettiBurst(x, y, n) {
+  const cols = ['#7df9ff', '#ff5df1', '#ffe14d', '#7dff8a', '#ffab3d', '#c66bff'];
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, sp = 150 + Math.random() * 450;
+    confetti.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 260, rot: Math.random() * Math.PI * 2, vr: (Math.random() - 0.5) * 14, t: 0, life: 1.6 + Math.random() * 1.0, c: cols[i % cols.length], w: 5 + Math.random() * 6, h: 3 + Math.random() * 4 });
+  }
+}
+// ambient falling embers in the arena background
+function spawnAmbient() {
+  if (ambient.length < 26 && Math.random() < 0.25) {
+    ambient.push({ x: Math.random() * GAME_W, y: -8, vx: (Math.random() - 0.5) * 18, vy: 22 + Math.random() * 34, s: 0.8 + Math.random() * 1.6, tw: Math.random() * 6, c: Math.random() < 0.5 ? '#7df9ff' : '#ff5df1' });
+  }
+}
 
 // ---------- update ----------
 function update(dt) {
+  const realDt = dt;
+  if (slowmo > 0) { slowmo = Math.max(0, slowmo - realDt); dt *= 0.25; }
   time += dt;
+  spawnAmbient();
+  for (const a of ambient) { a.x += a.vx * realDt; a.y += a.vy * realDt; }
+  ambient = ambient.filter(a => a.y < GAME_H + 10);
+  for (const c of confetti) {
+    c.t += realDt; c.vy += 620 * realDt; c.vx *= (1 - 1.6 * realDt);
+    c.x += c.vx * realDt; c.y += c.vy * realDt; c.rot += c.vr * realDt;
+  }
+  confetti = confetti.filter(c => c.t < c.life);
+  for (const b of stuck) { if (b.wob > 0) { b.wt += realDt; b.wob = Math.max(0, b.wob - realDt * 2.4); } }
   if (state === 'playing' || state === 'throwing' || state === 'break') {
     runTime += dt;
     targetAngle = norm(targetAngle + angVel(dt) * dt);
@@ -354,32 +410,129 @@ function update(dt) {
 }
 
 // ---------- draw ----------
-let woodCache = null;
+const targetCaches = new Map();
 const bossCaches = new Map();
-function targetTexture(r, bossDef) {
+function targetTexture(r, bossDef, type = 'wood') {
   const c = document.createElement('canvas');
   c.width = c.height = r * 2 + 8;
   const t = c.getContext('2d');
   t.translate(r + 4, r + 4);
-  if (!bossDef) {
-    // wooden disc with grain rings
+  if (!bossDef && type === 'wood') {
+    // wooden disc: plank grain, scorched bullseye center, worn edge
     const grad = t.createRadialGradient(0, 0, 8, 0, 0, r);
-    grad.addColorStop(0, '#a06a38'); grad.addColorStop(0.7, '#7d4e26'); grad.addColorStop(1, '#5c3618');
+    grad.addColorStop(0, '#b3793f'); grad.addColorStop(0.55, '#8a5a2c'); grad.addColorStop(0.85, '#6b4220'); grad.addColorStop(1, '#4a2c12');
     t.fillStyle = grad; t.beginPath(); t.arc(0, 0, r, 0, Math.PI * 2); t.fill();
+    // wavy grain rings (organic, not perfect circles)
     for (let i = 1; i <= 7; i++) {
-      t.strokeStyle = 'rgba(60,34,12,' + (0.25 + (i % 2) * 0.15) + ')';
+      t.strokeStyle = 'rgba(56,32,12,' + (0.3 + (i % 2) * 0.18) + ')';
       t.lineWidth = 2 + (i % 3);
-      t.beginPath(); t.arc(0, 0, r * i / 8 + Math.sin(i * 3.7) * 4, 0, Math.PI * 2); t.stroke();
+      t.beginPath();
+      const rr = r * i / 8;
+      for (let a = 0; a <= Math.PI * 2 + 0.1; a += 0.12) {
+        const wob = Math.sin(a * 3 + i * 2.1) * 3 + Math.sin(a * 7 + i) * 1.5;
+        const px = Math.cos(a) * (rr + wob), py = Math.sin(a) * (rr + wob);
+        if (a === 0) t.moveTo(px, py); else t.lineTo(px, py);
+      }
+      t.stroke();
     }
     // grain streaks
     for (let i = 0; i < 26; i++) {
       const a = (i / 26) * Math.PI * 2;
-      t.strokeStyle = 'rgba(50,28,10,0.22)'; t.lineWidth = 1.5;
+      t.strokeStyle = 'rgba(46,26,10,0.26)'; t.lineWidth = 1.5;
       t.beginPath(); t.moveTo(Math.cos(a) * r * 0.2, Math.sin(a) * r * 0.2);
       t.lineTo(Math.cos(a + 0.15) * r * 0.92, Math.sin(a + 0.15) * r * 0.92); t.stroke();
     }
+    // scorched / hammered bullseye center
+    const burn = t.createRadialGradient(0, 0, 0, 0, 0, r * 0.34);
+    burn.addColorStop(0, 'rgba(28,14,4,0.85)'); burn.addColorStop(0.6, 'rgba(48,26,10,0.5)'); burn.addColorStop(1, 'rgba(48,26,10,0)');
+    t.fillStyle = burn; t.beginPath(); t.arc(0, 0, r * 0.34, 0, Math.PI * 2); t.fill();
+    t.strokeStyle = 'rgba(255,190,90,0.35)'; t.lineWidth = 2.5;
+    t.beginPath(); t.arc(0, 0, r * 0.2, 0, Math.PI * 2); t.stroke();
+    t.strokeStyle = 'rgba(255,190,90,0.18)'; t.lineWidth = 2;
+    t.beginPath(); t.arc(0, 0, r * 0.34, 0, Math.PI * 2); t.stroke();
+    // random nicks & scratches from previous throws
+    let sd = 13;
+    const srnd = () => { sd = (sd * 1103515245 + 12345) % 2147483648; return sd / 2147483648; };
+    for (let i = 0; i < 12; i++) {
+      const a = srnd() * Math.PI * 2, rr = r * (0.3 + srnd() * 0.6);
+      t.strokeStyle = 'rgba(30,16,6,0.5)'; t.lineWidth = 1 + srnd() * 1.5;
+      t.beginPath(); t.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+      t.lineTo(Math.cos(a) * rr + (srnd() - 0.5) * 22, Math.sin(a) * rr + (srnd() - 0.5) * 22); t.stroke();
+    }
+    // top-left sheen
+    const sheen = t.createRadialGradient(-r * 0.4, -r * 0.4, 0, -r * 0.4, -r * 0.4, r * 1.1);
+    sheen.addColorStop(0, 'rgba(255,235,200,0.16)'); sheen.addColorStop(0.5, 'rgba(255,235,200,0)');
+    t.fillStyle = sheen; t.beginPath(); t.arc(0, 0, r, 0, Math.PI * 2); t.fill();
+  } else if (!bossDef && type === 'metal') {
+    // brushed steel disc with rivets, scratches and radial panels
+    const grad = t.createRadialGradient(-r * 0.3, -r * 0.35, 8, 0, 0, r);
+    grad.addColorStop(0, '#9aa8bc'); grad.addColorStop(0.45, '#6b7a90'); grad.addColorStop(0.8, '#49566b'); grad.addColorStop(1, '#333e50');
+    t.fillStyle = grad; t.beginPath(); t.arc(0, 0, r, 0, Math.PI * 2); t.fill();
+    // brushed concentric texture
+    for (let i = 0; i < 34; i++) {
+      t.strokeStyle = 'rgba(255,255,255,' + (0.02 + (i % 3) * 0.015) + ')';
+      t.lineWidth = 1;
+      t.beginPath(); t.arc(0, 0, r * (0.1 + 0.88 * i / 34), 0, Math.PI * 2); t.stroke();
+    }
+    // panel seams
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + 0.26;
+      t.strokeStyle = 'rgba(14,18,26,0.6)'; t.lineWidth = 2.5;
+      t.beginPath(); t.moveTo(Math.cos(a) * r * 0.28, Math.sin(a) * r * 0.28); t.lineTo(Math.cos(a) * r * 0.96, Math.sin(a) * r * 0.96); t.stroke();
+    }
+    // rivets ring (outer + inner)
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      for (const rr of [r * 0.86, r * 0.4]) {
+        if (rr < r * 0.5 && i % 2) continue;
+        const x = Math.cos(a) * rr, y = Math.sin(a) * rr;
+        const rg = t.createRadialGradient(x - 1.5, y - 1.5, 0.5, x, y, 4.5);
+        rg.addColorStop(0, '#dce6f2'); rg.addColorStop(0.6, '#8a98ac'); rg.addColorStop(1, '#3a4658');
+        t.fillStyle = rg; t.beginPath(); t.arc(x, y, 4.2, 0, Math.PI * 2); t.fill();
+      }
+    }
+    // scratches
+    let sd = 29;
+    const srnd = () => { sd = (sd * 1103515245 + 12345) % 2147483648; return sd / 2147483648; };
+    for (let i = 0; i < 14; i++) {
+      const a = srnd() * Math.PI * 2, rr = r * (0.2 + srnd() * 0.7);
+      t.strokeStyle = i % 2 ? 'rgba(220,232,244,0.28)' : 'rgba(16,20,30,0.4)'; t.lineWidth = 1;
+      t.beginPath(); t.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+      t.lineTo(Math.cos(a) * rr + (srnd() - 0.5) * 40, Math.sin(a) * rr + (srnd() - 0.5) * 40); t.stroke();
+    }
+    // hub
+    const hub = t.createRadialGradient(-3, -3, 1, 0, 0, r * 0.16);
+    hub.addColorStop(0, '#c4d0e0'); hub.addColorStop(0.7, '#5a6880'); hub.addColorStop(1, '#2c3646');
+    t.fillStyle = hub; t.beginPath(); t.arc(0, 0, r * 0.14, 0, Math.PI * 2); t.fill();
+    t.strokeStyle = 'rgba(10,14,22,0.8)'; t.lineWidth = 2;
+    t.beginPath(); t.arc(0, 0, r * 0.14, 0, Math.PI * 2); t.stroke();
+  } else if (!bossDef && type === 'energy') {
+    // energy disc: dark glass with cyan plasma core + hex ring segments
+    const grad = t.createRadialGradient(0, 0, 4, 0, 0, r);
+    grad.addColorStop(0, '#103a4e'); grad.addColorStop(0.5, '#0c2438'); grad.addColorStop(1, '#081420');
+    t.fillStyle = grad; t.beginPath(); t.arc(0, 0, r, 0, Math.PI * 2); t.fill();
+    // circuit-like arcs
+    for (let i = 0; i < 9; i++) {
+      const rr = r * (0.25 + i * 0.08);
+      const a0 = i * 1.7, span = 0.6 + (i % 3) * 0.8;
+      t.strokeStyle = 'rgba(125,249,255,' + (0.14 + (i % 2) * 0.12) + ')';
+      t.lineWidth = 1.5 + (i % 2);
+      t.beginPath(); t.arc(0, 0, rr, a0, a0 + span); t.stroke();
+      t.fillStyle = 'rgba(125,249,255,0.5)';
+      t.beginPath(); t.arc(Math.cos(a0 + span) * rr, Math.sin(a0 + span) * rr, 2.2, 0, Math.PI * 2); t.fill();
+    }
+    // hex segment ring
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      t.strokeStyle = 'rgba(125,249,255,0.35)'; t.lineWidth = 3;
+      t.beginPath(); t.arc(0, 0, r * 0.9, a + 0.04, a + Math.PI / 6 - 0.04); t.stroke();
+    }
+    // plasma core (drawn bright; pulse handled live in drawTarget)
+    const core = t.createRadialGradient(0, 0, 0, 0, 0, r * 0.3);
+    core.addColorStop(0, 'rgba(220,252,255,0.95)'); core.addColorStop(0.4, 'rgba(125,249,255,0.55)'); core.addColorStop(1, 'rgba(125,249,255,0)');
+    t.fillStyle = core; t.beginPath(); t.arc(0, 0, r * 0.3, 0, Math.PI * 2); t.fill();
   } else {
-    // boss: dark metal panels tinted per boss variant
+    // boss: dark metal panels tinted per boss variant + unique face
     const m = bossDef.metal;
     const grad = t.createRadialGradient(-r * 0.3, -r * 0.3, 10, 0, 0, r);
     grad.addColorStop(0, m[0]); grad.addColorStop(0.6, m[1]); grad.addColorStop(1, m[2]);
@@ -389,13 +542,74 @@ function targetTexture(r, bossDef) {
       t.strokeStyle = 'rgba(10,14,22,0.7)'; t.lineWidth = 3;
       t.beginPath(); t.moveTo(0, 0); t.lineTo(Math.cos(a) * r, Math.sin(a) * r); t.stroke();
       // rivets
-      t.fillStyle = '#8899b0';
       const rr = r * 0.8;
-      t.beginPath(); t.arc(Math.cos(a + 0.39) * rr, Math.sin(a + 0.39) * rr, 4, 0, Math.PI * 2); t.fill();
+      const rx = Math.cos(a + 0.39) * rr, ry = Math.sin(a + 0.39) * rr;
+      const rg = t.createRadialGradient(rx - 1.5, ry - 1.5, 0.5, rx, ry, 5);
+      rg.addColorStop(0, '#e0eaf6'); rg.addColorStop(0.6, '#8899b0'); rg.addColorStop(1, '#333e50');
+      t.fillStyle = rg; t.beginPath(); t.arc(rx, ry, 4.5, 0, Math.PI * 2); t.fill();
     }
-    t.strokeStyle = bossDef.rim; t.globalAlpha = 0.5; t.lineWidth = 4;
-    t.beginPath(); t.arc(0, 0, r * 0.45, 0, Math.PI * 2); t.stroke();
+    // rune ring in boss color
+    t.strokeStyle = bossDef.rim; t.globalAlpha = 0.55; t.lineWidth = 4;
+    t.beginPath(); t.arc(0, 0, r * 0.52, 0, Math.PI * 2); t.stroke();
+    t.globalAlpha = 0.35;
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2;
+      t.beginPath(); t.moveTo(Math.cos(a) * r * 0.48, Math.sin(a) * r * 0.48);
+      t.lineTo(Math.cos(a) * r * 0.56, Math.sin(a) * r * 0.56); t.stroke();
+    }
     t.globalAlpha = 1;
+    // dark vignette so face pops against the metal (behind face)
+    const vig = t.createRadialGradient(0, 0, r * 0.2, 0, 0, r * 0.72);
+    vig.addColorStop(0, 'rgba(0,0,0,0.3)'); vig.addColorStop(1, 'rgba(0,0,0,0)');
+    t.fillStyle = vig; t.beginPath(); t.arc(0, 0, r * 0.72, 0, Math.PI * 2); t.fill();
+    // unique menacing face per boss (eyes + mouth variants)
+    const id = bossDef.id;
+    const F = r / 110; // face scale factor so features read at any radius
+    t.save();
+    t.shadowColor = bossDef.rim; t.shadowBlur = 22;
+    t.fillStyle = bossDef.rim;
+    const ey = -r * 0.16, ex = r * 0.2;
+    t.save(); t.scale(F, F);
+    const exs = ex / F, eys = ey / F;
+    // eyes: angry slanted shapes, variant per id
+    for (const s of [-1, 1]) {
+      t.beginPath();
+      if (id % 4 === 0) { // slanted daggers
+        t.moveTo(s * exs - s * 20, eys - 14); t.lineTo(s * exs + s * 22, eys + 3); t.lineTo(s * exs - s * 14, eys + 14);
+      } else if (id % 4 === 1) { // furious triangles
+        t.moveTo(s * exs - s * 21, eys - 3); t.lineTo(s * exs + s * 17, eys - 17); t.lineTo(s * exs + s * 17, eys + 11);
+      } else if (id % 4 === 2) { // narrow visor slits
+        t.rect(s * exs - 21, eys - 6, 42, 11);
+      } else { // round glow cores
+        t.arc(s * exs, eys, 13, 0, Math.PI * 2);
+      }
+      t.closePath(); t.fill();
+    }
+    // mouth
+    t.beginPath();
+    const my = (r * 0.16) / F;
+    if (id % 3 === 0) { // jagged grin
+      t.moveTo(-38, my);
+      for (let k = 0; k <= 6; k++) t.lineTo(-38 + k * (76 / 6), my + (k % 2 ? 15 : 0));
+      t.lineTo(38, my + 9); t.lineTo(-38, my + 9);
+    } else if (id % 3 === 1) { // grim slash
+      t.rect(-34, my, 68, 7);
+    } else { // vents
+      for (let k = 0; k < 4; k++) t.rect(-32 + k * 19, my, 12, 17);
+    }
+    t.fill();
+    t.restore();
+    t.restore();
+    // horns / spikes decoration on rim
+    t.fillStyle = m[0];
+    t.strokeStyle = 'rgba(10,14,22,0.8)'; t.lineWidth = 2;
+    for (let i = 0; i < 3; i++) {
+      const a = -Math.PI / 2 + (i - 1) * 0.5;
+      const bx = Math.cos(a) * r * 0.94, by = Math.sin(a) * r * 0.94;
+      t.save(); t.translate(bx, by); t.rotate(a + Math.PI / 2);
+      t.beginPath(); t.moveTo(-9, 0); t.lineTo(0, -20 - (i === 1 ? 8 : 0)); t.lineTo(9, 0); t.closePath();
+      t.fill(); t.stroke(); t.restore();
+    }
   }
   return c;
 }
@@ -445,19 +659,56 @@ function drawBlade(x, y, rot, scale = 1, glow = true, skin = null) {
   }
   g.fill();
   g.shadowBlur = 0;
-  // core line
+  // metallic specular: bright edge highlight down one side of the blade
+  const spec = g.createLinearGradient(-W * 0.5, 0, W * 0.5, 0);
+  spec.addColorStop(0, 'rgba(255,255,255,0)');
+  spec.addColorStop(0.32, 'rgba(255,255,255,0.55)');
+  spec.addColorStop(0.45, 'rgba(255,255,255,0.1)');
+  spec.addColorStop(1, 'rgba(0,0,0,0.22)');
+  g.fillStyle = spec;
+  g.beginPath();
+  g.moveTo(0, -L * 0.58);
+  g.quadraticCurveTo(W * 0.55, -L * 0.2, W * 0.4, L * 0.05);
+  g.lineTo(-W * 0.4, L * 0.05);
+  g.quadraticCurveTo(-W * 0.55, -L * 0.2, 0, -L * 0.58);
+  g.fill();
+  // core fuller line (bright spine)
   g.strokeStyle = 'rgba(255,255,255,0.9)'; g.lineWidth = 2;
   g.beginPath(); g.moveTo(0, -L * 0.5); g.lineTo(0, 0); g.stroke();
-  // guard + handle
-  g.fillStyle = '#1a2436';
-  g.fillRect(-W * 0.62, L * 0.05, W * 1.24, W * 0.35);
-  const hg = g.createLinearGradient(0, L * 0.1, 0, L * 0.5);
-  hg.addColorStop(0, '#3a4a66'); hg.addColorStop(1, '#141c2c');
+  g.strokeStyle = 'rgba(255,255,255,0.28)'; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(-W * 0.18, -L * 0.4); g.lineTo(-W * 0.18, -L * 0.02); g.stroke();
+  // crossguard with beveled metal + colored tips
+  const gg = g.createLinearGradient(0, L * 0.05, 0, L * 0.05 + W * 0.35);
+  gg.addColorStop(0, '#4a5a78'); gg.addColorStop(0.5, '#22304a'); gg.addColorStop(1, '#121a2c');
+  g.fillStyle = gg;
+  roundRectPath(-W * 0.66, L * 0.05, W * 1.32, W * 0.36, 3); g.fill();
+  g.fillStyle = glowC; g.globalAlpha = 0.85;
+  g.beginPath(); g.arc(-W * 0.6, L * 0.05 + W * 0.18, W * 0.12, 0, Math.PI * 2); g.fill();
+  g.beginPath(); g.arc(W * 0.6, L * 0.05 + W * 0.18, W * 0.12, 0, Math.PI * 2); g.fill();
+  g.globalAlpha = 1;
+  // wrapped grip: alternating leather bands + side shading
+  const hg = g.createLinearGradient(-W * 0.3, 0, W * 0.3, 0);
+  hg.addColorStop(0, '#4a5a78'); hg.addColorStop(0.4, '#2c3a54'); hg.addColorStop(1, '#101828');
   g.fillStyle = hg;
-  g.fillRect(-W * 0.3, L * 0.1, W * 0.6, L * 0.34);
-  g.fillStyle = B.gem;
-  g.fillRect(-W * 0.3, L * 0.42, W * 0.6, W * 0.28);
+  roundRectPath(-W * 0.3, L * 0.1, W * 0.6, L * 0.34, 3); g.fill();
+  g.fillStyle = 'rgba(0,0,0,0.35)';
+  for (let k = 0; k < 4; k++) g.fillRect(-W * 0.3, L * (0.14 + k * 0.075), W * 0.6, L * 0.028);
+  g.fillStyle = 'rgba(255,255,255,0.14)';
+  g.fillRect(-W * 0.26, L * 0.1, W * 0.1, L * 0.34);
+  // pommel gem with glow + facet highlight
+  g.save();
+  g.shadowColor = B.gem === '#ffffff' ? glowC : B.gem; g.shadowBlur = 8;
+  const gemG = g.createRadialGradient(-W * 0.08, L * 0.46, 1, 0, L * 0.5, W * 0.34);
+  gemG.addColorStop(0, '#ffffff'); gemG.addColorStop(0.4, B.gem); gemG.addColorStop(1, 'rgba(0,0,0,0.6)');
+  g.fillStyle = gemG;
+  g.beginPath(); g.arc(0, L * 0.5, W * 0.3, 0, Math.PI * 2); g.fill();
   g.restore();
+  g.restore();
+}
+function roundRectPath(x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
 }
 
 function drawCrystal(x, y, rot, s = 1) {
@@ -485,32 +736,129 @@ initStars();
 
 function drawBG() {
   const bg = g.createLinearGradient(0, 0, 0, GAME_H);
-  bg.addColorStop(0, '#0a0c18'); bg.addColorStop(0.5, '#111530'); bg.addColorStop(1, '#1a1040');
+  bg.addColorStop(0, '#070912'); bg.addColorStop(0.45, '#101430'); bg.addColorStop(1, '#1c1044');
   g.fillStyle = bg; g.fillRect(0, 0, GAME_W, GAME_H);
   for (const s of stars) {
     g.fillStyle = 'rgba(180,220,255,' + (0.25 + 0.4 * Math.abs(Math.sin(time * 0.7 + s.tw))) + ')';
     g.beginPath(); g.arc(s.x, s.y, s.r, 0, Math.PI * 2); g.fill();
   }
+  // spotlight beams converging on the target from top corners
+  const beams = [
+    { x0: -40, sway: Math.sin(time * 0.5) * 30 },
+    { x0: GAME_W + 40, sway: Math.sin(time * 0.5 + 2.4) * 30 },
+  ];
+  g.save();
+  g.globalCompositeOperation = 'lighter';
+  for (const b of beams) {
+    const tx = CX + b.sway, ty = TARGET_Y;
+    const grad = g.createLinearGradient(b.x0, -40, tx, ty);
+    grad.addColorStop(0, 'rgba(125,180,255,0.10)');
+    grad.addColorStop(1, 'rgba(125,180,255,0)');
+    g.fillStyle = grad;
+    g.beginPath();
+    g.moveTo(b.x0, -40);
+    g.lineTo(tx - 90, ty + 60); g.lineTo(tx + 90, ty + 60);
+    g.closePath(); g.fill();
+  }
+  // soft halo behind the target
+  const halo = g.createRadialGradient(CX, TARGET_Y, 40, CX, TARGET_Y, 320);
+  halo.addColorStop(0, 'rgba(90,60,190,0.22)'); halo.addColorStop(0.6, 'rgba(60,40,140,0.10)'); halo.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = halo; g.beginPath(); g.arc(CX, TARGET_Y, 320, 0, Math.PI * 2); g.fill();
+  g.restore();
+  // neon side strips (arcade cabinet feel)
+  for (const sx of [10, GAME_W - 10]) {
+    const pulse = 0.35 + 0.2 * Math.sin(time * 2 + sx);
+    g.save();
+    g.shadowColor = '#ff5df1'; g.shadowBlur = 12;
+    g.strokeStyle = 'rgba(255,93,241,' + pulse + ')'; g.lineWidth = 3;
+    g.beginPath(); g.moveTo(sx, 120); g.lineTo(sx, GAME_H - 120); g.stroke();
+    g.shadowColor = '#7df9ff';
+    g.strokeStyle = 'rgba(125,249,255,' + (0.55 - pulse * 0.4) + ')'; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(sx + (sx < CX ? 6 : -6), 150); g.lineTo(sx + (sx < CX ? 6 : -6), GAME_H - 150); g.stroke();
+    g.restore();
+  }
+  // crowd silhouettes along the bottom (dark arena audience)
+  g.fillStyle = 'rgba(6,8,16,0.85)';
+  g.beginPath();
+  g.moveTo(0, GAME_H);
+  for (let i = 0; i <= 14; i++) {
+    const x = i * (GAME_W / 14);
+    const h = 26 + Math.abs(Math.sin(i * 2.7)) * 22 + Math.sin(time * 1.4 + i * 1.9) * 3;
+    g.quadraticCurveTo(x - GAME_W / 28, GAME_H - h - 12, x, GAME_H - h);
+  }
+  g.lineTo(GAME_W, GAME_H); g.closePath(); g.fill();
+  // ambient drifting embers
+  for (const a of ambient) {
+    g.fillStyle = a.c;
+    g.globalAlpha = 0.25 + 0.3 * Math.abs(Math.sin(time * 2 + a.tw));
+    g.beginPath(); g.arc(a.x, a.y, a.s, 0, Math.PI * 2); g.fill();
+  }
+  g.globalAlpha = 1;
+  // faint floor glow under play area
+  const fg = g.createRadialGradient(CX, GAME_H - 30, 10, CX, GAME_H - 30, 260);
+  fg.addColorStop(0, 'rgba(125,249,255,0.10)'); fg.addColorStop(1, 'rgba(125,249,255,0)');
+  g.fillStyle = fg; g.fillRect(0, GAME_H - 240, GAME_W, 240);
 }
 
 function drawTarget() {
-  if (!woodCache) woodCache = targetTexture(150, null);
-  const tex = boss && bossInfo ? bossTexture(bossInfo, 190) : woodCache;
-  const rim = boss && bossInfo ? bossInfo.rim : '#7df9ff';
+  let tex;
+  if (boss && bossInfo) tex = bossTexture(bossInfo, 190);
+  else {
+    const key = targetType + ':' + targetR;
+    if (!targetCaches.has(key)) targetCaches.set(key, targetTexture(targetR, null, targetType));
+    tex = targetCaches.get(key);
+  }
+  const rim = boss && bossInfo ? bossInfo.rim : (targetType === 'metal' ? '#bfd4ee' : targetType === 'energy' ? '#7df9ff' : '#ffab3d');
   g.save();
   g.translate(CX, TARGET_Y);
+  // boss aura: pulsing colored haze + orbiting motes
+  if (boss && bossInfo) {
+    const pul = 0.5 + 0.5 * Math.sin(time * 3);
+    const aur = g.createRadialGradient(0, 0, targetR * 0.7, 0, 0, targetR * 1.45 + pul * 14);
+    aur.addColorStop(0, 'rgba(0,0,0,0)');
+    aur.addColorStop(0.6, hexA(bossInfo.rim, 0.10 + pul * 0.08));
+    aur.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = aur; g.beginPath(); g.arc(0, 0, targetR * 1.5 + pul * 14, 0, Math.PI * 2); g.fill();
+    for (let i = 0; i < 6; i++) {
+      const a = time * 1.2 + (i / 6) * Math.PI * 2;
+      const rr = targetR * 1.22 + Math.sin(time * 2.4 + i) * 8;
+      g.fillStyle = bossInfo.rim;
+      g.globalAlpha = 0.5 + 0.3 * Math.sin(time * 3 + i);
+      g.beginPath(); g.arc(Math.cos(a) * rr, Math.sin(a) * rr, 3, 0, Math.PI * 2); g.fill();
+    }
+    g.globalAlpha = 1;
+  }
+  // energy disc: live pulsing core glow over the cached texture
   // neon rim glow
   g.shadowColor = rim; g.shadowBlur = 24;
   g.strokeStyle = rim; g.lineWidth = 5;
   g.beginPath(); g.arc(0, 0, targetR + 4, 0, Math.PI * 2); g.stroke();
   g.shadowBlur = 0;
+  // rotating specular highlight on the rim (metallic sheen)
+  const hlA = -targetAngle * 0.7 - 0.9;
+  g.strokeStyle = 'rgba(255,255,255,0.55)'; g.lineWidth = 3; g.lineCap = 'round';
+  g.beginPath(); g.arc(0, 0, targetR + 4, hlA - 0.45, hlA + 0.45); g.stroke();
+  g.strokeStyle = 'rgba(255,255,255,0.2)';
+  g.beginPath(); g.arc(0, 0, targetR + 4, hlA + Math.PI - 0.3, hlA + Math.PI + 0.3); g.stroke();
+  g.lineCap = 'butt';
   g.rotate(targetAngle);
   g.drawImage(tex, -tex.width / 2, -tex.height / 2);
   g.restore();
+  // energy core pulse (screen-space, on top of rotation)
+  if (!boss && targetType === 'energy') {
+    const pul = 0.6 + 0.4 * Math.sin(time * 5);
+    g.save();
+    g.globalCompositeOperation = 'lighter';
+    const core = g.createRadialGradient(CX, TARGET_Y, 0, CX, TARGET_Y, targetR * 0.34);
+    core.addColorStop(0, 'rgba(200,250,255,' + (0.5 * pul) + ')');
+    core.addColorStop(1, 'rgba(125,249,255,0)');
+    g.fillStyle = core; g.beginPath(); g.arc(CX, TARGET_Y, targetR * 0.34, 0, Math.PI * 2); g.fill();
+    g.restore();
+  }
   // stuck blades (handles sticking out, rotating with target)
   for (const b of stuck) {
     const wa = targetAngle + b.rel;
-    drawBladeStuck(wa);
+    drawBladeStuck(wa, b);
   }
   // crystals on rim
   for (const c of crystals) {
@@ -522,11 +870,18 @@ function drawTarget() {
   }
 }
 
-function drawBladeStuck(wa) {
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+}
+
+function drawBladeStuck(wa, b) {
   const depth = 30; // how deep tip is inside
+  // springy oscillation right after impact (decaying sine)
+  const wob = b && b.wob > 0 ? Math.sin(b.wt * 34) * b.wob * 0.12 : 0;
   const cx = CX + Math.cos(wa) * (targetR - depth + BLADE_LEN * 0.58);
   const cy = TARGET_Y + Math.sin(wa) * (targetR - depth + BLADE_LEN * 0.58);
-  drawBlade(cx, cy, wa + Math.PI, 1, false);
+  drawBlade(cx, cy, wa + Math.PI + wob, 1, false);
 }
 
 function drawShardCounter(x, y, n, align = 'right') {
@@ -562,9 +917,20 @@ function drawHUD() {
   // combo
   if (combo > 1 && comboTimer > 0) {
     g.textAlign = 'center';
-    g.fillStyle = '#ffe14d';
-    g.font = '800 ' + (26 + Math.min(combo, 8) * 2) + 'px "Segoe UI", sans-serif';
+    const heat = Math.min(combo / 8, 1);
+    const pop = comboTimer > 1.45 ? (comboTimer - 1.45) * 6 : 0; // punch-in on new hit
+    g.save();
+    g.shadowColor = heat > 0.6 ? '#ff5df1' : '#ffe14d';
+    g.shadowBlur = 8 + heat * 26 + pop * 10;
+    g.fillStyle = heat > 0.6 ? '#ffb3f4' : '#ffe14d';
+    g.font = '800 ' + ((26 + Math.min(combo, 8) * 2) * (1 + pop * 0.12)) + 'px "Segoe UI", sans-serif';
     g.fillText('COMBO x' + combo, CX, 118);
+    if (combo >= 5) {
+      g.font = '700 14px "Segoe UI", sans-serif';
+      g.fillStyle = '#ffffff'; g.shadowBlur = 6;
+      g.fillText(combo >= 8 ? 'UNSTOPPABLE!' : 'ON FIRE!', CX, 152);
+    }
+    g.restore();
   }
   // contextual first-play hint
   if (hintT > 0 && state === 'playing') {
@@ -665,7 +1031,21 @@ function drawShop() {
     g.strokeStyle = color; g.lineWidth = eq ? 3 : 2;
     roundRect(c.x - c.w / 2, c.y - c.h / 2, c.w, c.h, 12); g.stroke();
     g.restore();
-    drawBlade(c.x, c.y - 14, -Math.PI / 2, 0.72, true, b);
+    if (eq) {
+      // rotating showcase on a glowing pedestal for the equipped blade
+      g.save();
+      const pg = g.createRadialGradient(c.x, c.y + 34, 2, c.x, c.y + 34, 40);
+      pg.addColorStop(0, 'rgba(125,249,255,0.5)'); pg.addColorStop(1, 'rgba(125,249,255,0)');
+      g.fillStyle = pg;
+      g.beginPath(); g.ellipse(c.x, c.y + 34, 44, 12, 0, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = 'rgba(125,249,255,0.7)'; g.lineWidth = 2;
+      g.beginPath(); g.ellipse(c.x, c.y + 34, 34, 9, 0, 0, Math.PI * 2); g.stroke();
+      g.restore();
+      const sway = Math.sin(time * 1.6) * 0.35;
+      drawBlade(c.x, c.y - 14, -Math.PI / 2 + sway, 0.72 + Math.sin(time * 1.6 + 1.2) * 0.04, true, b);
+    } else {
+      drawBlade(c.x, c.y - 14, -Math.PI / 2, 0.72, true, b);
+    }
     g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillStyle = '#ffffff'; g.font = '700 13px "Segoe UI", sans-serif';
     g.fillText(b.name, c.x, c.y + 44);
@@ -774,11 +1154,23 @@ function draw() {
     // demo target
     drawTarget();
     g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.shadowColor = '#7df9ff'; g.shadowBlur = 26;
-    g.fillStyle = '#ffffff';
+    // neon arcade sign: chromatic offset layers + flicker
+    const flick = Math.random() < 0.02 ? 0.6 : 1;
     g.font = '900 74px "Segoe UI", sans-serif';
+    g.globalAlpha = 0.8 * flick;
+    g.fillStyle = '#ff5df1';
+    g.fillText('BLADE', CX - 3, 520 - 44); g.fillText('RUSH', CX - 3, 520 + 34);
+    g.fillStyle = '#7df9ff';
+    g.fillText('BLADE', CX + 3, 520 - 44); g.fillText('RUSH', CX + 3, 520 + 34);
+    g.globalAlpha = flick;
+    g.shadowColor = '#7df9ff'; g.shadowBlur = 30;
+    g.fillStyle = '#ffffff';
     g.fillText('BLADE', CX, 520 - 44);
     g.fillText('RUSH', CX, 520 + 34);
+    g.shadowBlur = 0; g.globalAlpha = 1;
+    // underline slash
+    g.strokeStyle = '#ffe14d'; g.lineWidth = 4; g.shadowColor = '#ffe14d'; g.shadowBlur = 14;
+    g.beginPath(); g.moveTo(CX - 130, 588); g.lineTo(CX + 130, 588); g.stroke();
     g.shadowBlur = 0;
     drawButton(BTN.play.x, BTN.play.y, BTN.play.w, BTN.play.h, 'PLAY', '#7df9ff');
     drawButton(BTN.shop.x, BTN.shop.y, BTN.shop.w, BTN.shop.h, '\u2694 ARMORY', '#ffe14d', true);
@@ -808,7 +1200,19 @@ function draw() {
       if (state !== 'break') break;
       g.save(); g.translate(p.x, p.y); g.rotate(p.rot);
       if (p.blade) { drawBlade(0, 0, -Math.PI / 2, 1, false); }
-      else {
+      else if (p.tex) {
+        // textured wedge chunk cut from the actual target
+        g.beginPath();
+        g.moveTo(0, 0);
+        g.arc(0, 0, p.r0, p.a0, p.a0 + p.span);
+        g.closePath();
+        g.clip();
+        g.drawImage(p.tex, -p.tex.width / 2, -p.tex.height / 2);
+        // shaded fracture edge
+        g.strokeStyle = 'rgba(0,0,0,0.55)'; g.lineWidth = 4;
+        g.beginPath(); g.moveTo(0, 0); g.lineTo(Math.cos(p.a0) * p.r0, Math.sin(p.a0) * p.r0); g.stroke();
+        g.beginPath(); g.moveTo(0, 0); g.lineTo(Math.cos(p.a0 + p.span) * p.r0, Math.sin(p.a0 + p.span) * p.r0); g.stroke();
+      } else {
         g.fillStyle = p.metal ? p.metal[1] : '#7d4e26';
         g.strokeStyle = p.metal ? '#8899b0' : '#5c3618'; g.lineWidth = 3;
         g.beginPath();
@@ -822,12 +1226,24 @@ function draw() {
     if (state === 'throwing') {
       const B = META.equippedBlade();
       const trailC = B.glow === 'prism' ? prismColor() : B.glow;
+      // tapered glowing ribbon trail
+      g.save();
+      g.globalCompositeOperation = 'lighter';
       for (const t of trail) {
         const a = 1 - t.t / 0.25;
-        g.save(); g.globalAlpha = a * 0.35; g.fillStyle = trailC;
-        g.fillRect(CX - 4 * a, t.y + BLADE_LEN * 0.3, 8 * a, 26);
-        g.restore();
+        const w = 9 * a;
+        g.globalAlpha = a * 0.3;
+        g.shadowColor = trailC; g.shadowBlur = 10;
+        g.fillStyle = trailC;
+        g.beginPath();
+        g.ellipse(CX, t.y + BLADE_LEN * 0.42, w, 20 * a + 8, 0, 0, Math.PI * 2);
+        g.fill();
+        g.globalAlpha = a * 0.5;
+        g.shadowBlur = 0;
+        g.fillStyle = '#ffffff';
+        g.beginPath(); g.ellipse(CX, t.y + BLADE_LEN * 0.42, w * 0.3, 14 * a + 5, 0, 0, Math.PI * 2); g.fill();
       }
+      g.restore();
       drawBlade(CX, throwY + BLADE_LEN * 0.58, -Math.PI / 2, 1, true);
     }
     // ready blade at bottom
@@ -863,8 +1279,23 @@ function draw() {
     const a = 1 - p.t / p.life;
     if (p.glow) { g.shadowColor = p.c; g.shadowBlur = 8; }
     g.fillStyle = p.c; g.globalAlpha = a;
-    g.fillRect(p.x - p.s / 2, p.y - p.s / 2, p.s, p.s);
+    if (p.streak) {
+      // motion-streaked spark
+      g.strokeStyle = p.c; g.lineWidth = p.s;
+      g.beginPath(); g.moveTo(p.x, p.y);
+      g.lineTo(p.x - p.vx * 0.03, p.y - p.vy * 0.03); g.stroke();
+    } else {
+      g.fillRect(p.x - p.s / 2, p.y - p.s / 2, p.s, p.s);
+    }
     g.globalAlpha = 1; g.shadowBlur = 0;
+  }
+  // confetti (boss defeat)
+  for (const c of confetti) {
+    const a = Math.min(1, 2.5 * (1 - c.t / c.life));
+    g.save(); g.globalAlpha = a; g.translate(c.x, c.y); g.rotate(c.rot);
+    g.fillStyle = c.c;
+    g.fillRect(-c.w / 2, -c.h / 2, c.w, c.h);
+    g.restore();
   }
   // floats
   for (const f of floats) {

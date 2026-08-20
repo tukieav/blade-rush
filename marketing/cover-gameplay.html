@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><style>html,body{margin:0;padding:0;background:#000}</style></head>
+<body>
+<canvas id="cover"></canvas>
+<script>
+// Gameplay-based cover compositor — ?w=1920&h=1080&img=qa-boss.png&img2=qa-wood.png
+const q = new URLSearchParams(location.search);
+const W = parseInt(q.get('w') || '1920', 10);
+const H = parseInt(q.get('h') || '1080', 10);
+const canvas = document.getElementById('cover');
+canvas.width = W; canvas.height = H;
+const g = canvas.getContext('2d');
+
+function load(src) { return new Promise(res => { const i = new Image(); i.onload = () => res(i); i.src = src; }); }
+
+(async () => {
+  const img1 = await load(q.get('img') || 'qa-boss.png');
+  const img2 = await load(q.get('img2') || 'qa-wood.png');
+  // bg gradient
+  const bg = g.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, '#0a0c18'); bg.addColorStop(0.5, '#131940'); bg.addColorStop(1, '#1e1050');
+  g.fillStyle = bg; g.fillRect(0, 0, W, H);
+  const nebula = (x, y, r, c) => {
+    const n = g.createRadialGradient(x, y, 0, x, y, r);
+    n.addColorStop(0, c); n.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = n; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+  };
+  nebula(W * 0.2, H * 0.3, W * 0.35, 'rgba(60,30,160,0.35)');
+  nebula(W * 0.85, H * 0.65, W * 0.35, 'rgba(255,93,241,0.16)');
+  // stars
+  let seed = 7; const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+  for (let i = 0; i < 160; i++) {
+    g.fillStyle = 'rgba(190,225,255,' + (0.2 + rnd() * 0.5) + ')';
+    g.beginPath(); g.arc(rnd() * W, rnd() * H, rnd() * 2.2 + 0.4, 0, Math.PI * 2); g.fill();
+  }
+  const portrait = H > W;
+  const wide = W === H ? false : !portrait;
+  // gameplay panels: tilted phone-frame crops of the real game
+  function panel(img, x, y, h, rot, glow) {
+    const ratio = img.width / img.height;
+    const ph = h, pw = ph * ratio;
+    g.save(); g.translate(x, y); g.rotate(rot);
+    g.shadowColor = glow; g.shadowBlur = 60;
+    g.fillStyle = '#0a0c18';
+    g.fillRect(-pw / 2 - 10, -ph / 2 - 10, pw + 20, ph + 20);
+    g.shadowBlur = 0;
+    g.drawImage(img, -pw / 2, -ph / 2, pw, ph);
+    g.strokeStyle = glow; g.lineWidth = 6;
+    g.strokeRect(-pw / 2 - 10, -ph / 2 - 10, pw + 20, ph + 20);
+    g.restore();
+  }
+  if (wide) {
+    panel(img2, W * 0.22, H * 0.55, H * 0.86, -0.06, '#7df9ff');
+    panel(img1, W * 0.80, H * 0.55, H * 0.94, 0.05, '#ff5df1');
+  } else if (portrait) {
+    panel(img1, W * 0.5, H * 0.62, H * 0.62, 0.03, '#ff5df1');
+  } else {
+    panel(img1, W * 0.68, H * 0.56, H * 0.8, 0.06, '#ff5df1');
+    panel(img2, W * 0.26, H * 0.6, H * 0.66, -0.08, '#7df9ff');
+  }
+  // vignette
+  const vig = g.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.75);
+  vig.addColorStop(0, 'rgba(0,0,0,0)'); vig.addColorStop(1, 'rgba(0,0,0,0.55)');
+  g.fillStyle = vig; g.fillRect(0, 0, W, H);
+  // title: neon chromatic
+  const fs = Math.min(W, H) * (portrait ? 0.16 : 0.155);
+  const tx = W / 2, ty = portrait ? H * 0.18 : (wide ? H * 0.42 : H * 0.2);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = '900 ' + fs + 'px "Segoe UI", sans-serif';
+  g.globalAlpha = 0.85;
+  g.fillStyle = '#ff5df1'; g.fillText('BLADE', tx - fs * 0.045, ty); g.fillText('RUSH', tx - fs * 0.045, ty + fs * 1.02);
+  g.fillStyle = '#7df9ff'; g.fillText('BLADE', tx + fs * 0.045, ty); g.fillText('RUSH', tx + fs * 0.045, ty + fs * 1.02);
+  g.globalAlpha = 1;
+  g.shadowColor = '#7df9ff'; g.shadowBlur = fs * 0.45;
+  g.fillStyle = '#ffffff';
+  g.fillText('BLADE', tx, ty); g.fillText('RUSH', tx, ty + fs * 1.02);
+  g.shadowBlur = 0;
+  // slash underline
+  g.strokeStyle = '#ffe14d'; g.lineWidth = fs * 0.06; g.shadowColor = '#ffe14d'; g.shadowBlur = fs * 0.3;
+  g.beginPath(); g.moveTo(tx - fs * 1.7, ty + fs * 1.62); g.lineTo(tx + fs * 1.7, ty + fs * 1.62); g.stroke();
+  g.shadowBlur = 0;
+  // tagline
+  g.fillStyle = 'rgba(255,255,255,0.85)'; g.font = '700 ' + fs * 0.24 + 'px "Segoe UI", sans-serif';
+  g.fillText('NEON KNIFE-THROW ARCADE', tx, ty + fs * 1.98);
+  document.title = 'done';
+})();
+</script>
+</body>
+</html>
