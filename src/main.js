@@ -959,6 +959,7 @@ function frame(ts) {
   requestAnimationFrame(frame);
 }
 
+let booted = false;
 // ---------- boot ----------
 (async () => {
   await SDK.initSDK();
@@ -970,14 +971,16 @@ function frame(ts) {
   SDK.onSettingsChange((s) => { muted = !!s.muteAudio; AU.setMuted(muted); });
   const daily = META.checkDaily();
   if (daily) toasts.push({ txt: 'DAILY BONUS — DAY ' + daily.day, sub: '+' + daily.reward + ' \u25C6 shards', t: 0, color: '#ffe14d' });
-  setupLevel(1);
+  if (state === 'menu') setupLevel(1); // don't reset a game started before boot finished
   SDK.loadingStop();
+  booted = true;
   requestAnimationFrame(frame);
 })();
 
 // ---------- debug hook ----------
 if (new URLSearchParams(location.search).get('debug') === '1') {
   window.__astro = {
+    booted: () => booted,
     forceGameOver: () => { if (state === 'playing' || state === 'throwing') startDeath(); dieT = 2; doGameOver(); },
     getState: () => ({
       state, level, score, bladesLeft, bladesTotal, combo, best, canContinue, continueUsed, stuck: stuck.length,

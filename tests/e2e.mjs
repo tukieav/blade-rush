@@ -44,15 +44,20 @@ async function canvasBright() {
   });
 }
 
+async function waitBoot() {
+  await page.waitForFunction(() => window.__astro && window.__astro.booted && window.__astro.booted(), null, { timeout: 20000 });
+  await page.waitForTimeout(300);
+}
+
 await page.goto(BASE + '/?debug=1', { waitUntil: 'networkidle' });
-await page.waitForTimeout(1200);
+await waitBoot();
 
 const dbg = await page.evaluate(() => !!window.__astro);
 check('debug hook present', dbg);
 // fresh meta for deterministic run
 await page.evaluate(() => window.__astro.resetMeta());
 await page.reload({ waitUntil: 'networkidle' });
-await page.waitForTimeout(1200);
+await waitBoot();
 
 const st0 = await page.evaluate(() => window.__astro.getState());
 check('starts in menu', st0.state === 'menu');
@@ -170,7 +175,7 @@ check('missions completed persisted', st.missionsDone.length >= 1);
 await page.evaluate(() => { window.__astro.goMenu(); });
 const persistShards = st.shards;
 await page.reload({ waitUntil: 'networkidle' });
-await page.waitForTimeout(1200);
+await waitBoot();
 st = await page.evaluate(() => window.__astro.getState());
 check('meta persists after reload', st.shards === persistShards && st.owned.includes('crimson') && st.bossesSeen.length === 1);
 check('no second daily bonus same day', st.streak.count === 1);
