@@ -14,6 +14,13 @@ const THROW_SPEED = 2600;
 const canvas = document.getElementById('game');
 const g = canvas.getContext('2d');
 
+// The simulation intentionally stays in a stable portrait coordinate space.  The
+// renderer projects that action lane into a full-bleed DPR canvas and uses the
+// remaining desktop width for the live arena broadcast.
+let viewW = 0, viewH = 0, pixelRatio = 1;
+let stageScale = 1, stageX = 0, stageY = 0;
+let firstHitThisRun = false;
+
 // ---------- state ----------
 let state = 'menu'; // menu | playing | throwing | break | dying | gameover | shop | bosses | missions
 let level = 1, score = 0, best = 0;
@@ -54,7 +61,8 @@ function isBoss(lv) { return lv % 5 === 0; }
 function setupLevel(lv) {
   boss = isBoss(lv);
   bossInfo = boss ? META.bossForLevel(lv) : null;
-  targetR = boss ? 190 : 150;
+  // The onboarding levels are generous without changing collision/timing rules.
+  targetR = boss ? 190 : (lv <= 2 ? 172 : 150);
   targetType = boss ? 'boss' : (lv % 7 === 0 ? 'energy' : (lv % 3 === 0 ? 'metal' : 'wood'));
   stuck = [];
   crystals = [];
@@ -115,7 +123,8 @@ function startGame() {
   level = 1; score = 0; combo = 0; comboTimer = 0;
   continueUsed = false;
   runTime = 0; runShards = 0; runBosses = 0; x2Used = false;
-  hintT = META.M.stats.runs < 2 ? 6 : 0; // contextual hint for brand-new players
+  hintT = 7; // every new run communicates the one-action core immediately
+  firstHitThisRun = false;
   setupLevel(level);
   state = 'playing';
   onMissions(META.bump('runs', 1));
@@ -165,7 +174,15 @@ function impact() {
   addFloat('+' + pts + (combo > 1 ? '  x' + combo : ''), CX, TARGET_Y + targetR + 60, '#ffe14d');
   shake = Math.min(4 + combo * 1.5, 16);
   splinterParticles();
-  sparkBurst(CX, TARGET_Y + targetR, 10 + combo * 2);
+  const openingHit = !firstHitThisRun && runTime < 30;
+  sparkBurst(CX, TARGET_Y + targetR, openingHit ? 38 : 10 + combo * 2);
+  if (openingHit) {
+    firstHitThisRun = true;
+    burstParticles(CX, TARGET_Y + targetR, 24);
+    addFloat('FIRST STRIKE!', CX, TARGET_Y - targetR - 38, '#7df9ff');
+    toasts.push({ txt: 'DIRECT HIT', sub: 'Keep the combo alive', t: 0, color: '#ffe14d' });
+    flashT = 0.14;
+  }
   AU.hitSound(combo);
   flashT = 0.06;
   if (bladesLeft <= 0) {
@@ -734,6 +751,126 @@ function initStars() {
 }
 initStars();
 
+// ---------- full-bleed desktop arena ----------
+function drawArenaPanel(x, y, w, h, color, title, lines) {
+  g.save();
+  const glow = 0.55 + Math.sin(time * 2 + x * 0.01) * 0.18;
+  g.fillStyle = 'rgba(7,13,31,0.84)';
+  roundRect(x, y, w, h, 14); g.fill();
+  g.strokeStyle = hexA(color, glow); g.lineWidth = 2;
+  g.shadowColor = color; g.shadowBlur = 14;
+  roundRect(x, y, w, h, 14); g.stroke();
+  g.shadowBlur = 0;
+  g.fillStyle = color; g.font = '800 13px "Segoe UI", sans-serif';
+  g.textAlign = 'left'; g.textBaseline = 'top'; g.fillText(title, x + 15, y + 14);
+  g.strokeStyle = hexA(color, 0.32); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(x + 15, y + 35); g.lineTo(x + w - 15, y + 35); g.stroke();
+  let yy = y + 52;
+  for (const line of lines) {
+    g.fillStyle = line.color || 'rgba(235,245,255,0.82)';
+    g.font = (line.bold ? '700 ' : '600 ') + (line.small ? '11' : '13') + 'px "Segoe UI", sans-serif';
+    g.fillText(line.text, x + 15, yy);
+    if (line.progress != null) {
+      const bw = w - 30;
+      g.fillStyle = 'rgba(255,255,255,0.12)'; roundRect(x + 15, yy + 18, bw, 7, 4); g.fill();
+      g.fillStyle = color; roundRect(x + 15, yy + 18, Math.max(7, bw * line.progress), 7, 4); g.fill();
+      yy += 14;
+    }
+    yy += line.gap || 25;
+  }
+  g.restore();
+}
+
+function drawArenaCrowd(horizon) {
+  // Three moving seating tiers give the wings depth instead of a decorative frame.
+  for (let tier = 0; tier < 3; tier++) {
+    const y = horizon - 122 + tier * 34;
+    g.fillStyle = 'rgba(' + (8 + tier * 3) + ',' + (13 + tier * 4) + ',' + (31 + tier * 8) + ',0.88)';
+    g.fillRect(0, y, viewW, 38);
+    for (let i = 0; i < Math.ceil(viewW / 22); i++) {
+      const x = i * 22 + (tier % 2) * 8;
+      const bob = Math.sin(time * (1.5 + tier * 0.2) + i * 1.71) * 2;
+      const lit = (i + tier * 3) % 7 === 0;
+      g.fillStyle = lit ? (i % 2 ? 'rgba(255,93,241,0.55)' : 'rgba(125,249,255,0.55)') : 'rgba(16,22,43,0.94)';
+      g.beginPath(); g.arc(x, y + 9 + bob, 4, 0, Math.PI * 2); g.fill();
+      g.fillStyle = 'rgba(7,10,22,0.96)'; g.fillRect(x - 5, y + 13 + bob, 10, 16);
+    }
+    g.strokeStyle = tier === 0 ? 'rgba(125,249,255,0.23)' : 'rgba(255,255,255,0.09)'; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(0, y + 36); g.lineTo(viewW, y + 36); g.stroke();
+  }
+}
+
+function drawSponsorBoard(x, y, w, label, color) {
+  g.save();
+  const pulse = 0.58 + Math.sin(time * 3 + x * 0.02) * 0.18;
+  g.fillStyle = 'rgba(10,18,40,0.86)'; roundRect(x, y, w, 34, 5); g.fill();
+  g.strokeStyle = hexA(color, pulse); g.lineWidth = 1.5; g.shadowColor = color; g.shadowBlur = 9;
+  roundRect(x, y, w, 34, 5); g.stroke(); g.shadowBlur = 0;
+  g.fillStyle = color; g.font = '800 12px "Segoe UI", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(label, x + w / 2, y + 18);
+  g.restore();
+}
+
+function drawArena() {
+  const bg = g.createLinearGradient(0, 0, 0, viewH);
+  bg.addColorStop(0, '#050817'); bg.addColorStop(0.47, '#111a42'); bg.addColorStop(1, '#080d22');
+  g.fillStyle = bg; g.fillRect(0, 0, viewW, viewH);
+  // arena ceiling trusses
+  g.strokeStyle = 'rgba(105,142,205,0.16)'; g.lineWidth = 2;
+  for (let x = -80; x < viewW + 100; x += 92) {
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(viewW / 2, viewH * 0.44); g.stroke();
+  }
+  // Live moving spotlights sweep across the room, converging behind the target.
+  const focusX = stageX + CX * stageScale, focusY = stageY + TARGET_Y * stageScale;
+  g.save(); g.globalCompositeOperation = 'lighter';
+  const rigs = [
+    { x: viewW * 0.08, c: '#7df9ff', p: 0 }, { x: viewW * 0.31, c: '#ff5df1', p: 1.9 },
+    { x: viewW * 0.69, c: '#7df9ff', p: 3.2 }, { x: viewW * 0.92, c: '#ffe14d', p: 4.6 },
+  ];
+  for (const r of rigs) {
+    const tx = focusX + Math.sin(time * 0.7 + r.p) * Math.min(viewW * 0.18, 230);
+    const grad = g.createLinearGradient(r.x, -20, tx, focusY + 90);
+    grad.addColorStop(0, hexA(r.c, 0.17)); grad.addColorStop(1, hexA(r.c, 0));
+    g.fillStyle = grad; g.beginPath(); g.moveTo(r.x - 26, -20); g.lineTo(r.x + 26, -20); g.lineTo(tx + 78, focusY + 95); g.lineTo(tx - 78, focusY + 95); g.closePath(); g.fill();
+  }
+  const halo = g.createRadialGradient(focusX, focusY, 40, focusX, focusY, Math.max(330, viewH * 0.48));
+  halo.addColorStop(0, 'rgba(125,249,255,0.12)'); halo.addColorStop(1, 'rgba(125,249,255,0)');
+  g.fillStyle = halo; g.beginPath(); g.arc(focusX, focusY, Math.max(330, viewH * 0.48), 0, Math.PI * 2); g.fill(); g.restore();
+  const horizon = Math.min(viewH * 0.72, focusY + 250 * stageScale);
+  drawArenaCrowd(horizon);
+  // reflective stage floor
+  const floor = g.createLinearGradient(0, horizon, 0, viewH);
+  floor.addColorStop(0, 'rgba(39,60,109,0.72)'); floor.addColorStop(0.18, 'rgba(13,22,52,0.88)'); floor.addColorStop(1, 'rgba(4,7,20,0.98)');
+  g.fillStyle = floor; g.beginPath(); g.moveTo(0, horizon); g.lineTo(viewW, horizon); g.lineTo(viewW, viewH); g.lineTo(0, viewH); g.closePath(); g.fill();
+  g.save(); g.globalAlpha = 0.35;
+  for (let y = horizon + 18; y < viewH; y += 34) { g.strokeStyle = 'rgba(125,249,255,0.23)'; g.beginPath(); g.moveTo(0, y); g.lineTo(viewW, y); g.stroke(); }
+  for (let x = -viewW; x < viewW * 2; x += 86) { g.strokeStyle = 'rgba(255,93,241,0.12)'; g.beginPath(); g.moveTo(focusX, horizon); g.lineTo(x, viewH); g.stroke(); }
+  g.restore();
+  // Sponsor boards are deliberately outside the action lane so play stays legible.
+  drawSponsorBoard(26, 42, 138, 'NOVA // LIVE', '#7df9ff');
+  drawSponsorBoard(viewW - 164, 42, 138, 'RUSH LEAGUE', '#ff5df1');
+  if (viewW / viewH >= 1.12) {
+    const wing = Math.min(270, Math.max(154, stageX - 58));
+    const mission = META.MISSIONS.find(m => !META.M.missionsDone.includes(m.id)) || META.MISSIONS[0];
+    const progress = META.missionProgress(mission) / mission.target;
+    drawArenaPanel(28, Math.max(105, viewH * 0.18), wing, 190, '#ff5df1', 'BOSS PROGRESSION', [
+      { text: 'NEXT // ' + META.bossForLevel(level + (5 - level % 5)).name, bold: true, color: '#ffffff' },
+      { text: 'SECTOR ' + Math.ceil(level / 5) + '  •  LEVEL ' + level, small: true, color: 'rgba(235,245,255,0.64)' },
+      { text: '◉  ' + META.M.bossesSeen.length + ' / ' + META.BOSSES.length + ' defeated', color: '#ffb3f4' },
+      { text: 'ARENA RANK: ROOKIE', small: true, color: '#7df9ff' },
+    ]);
+    drawArenaPanel(viewW - wing - 28, Math.max(105, viewH * 0.18), wing, 214, '#7df9ff', 'BLADE LOADOUT', [
+      { text: META.equippedBlade().name, bold: true, color: '#ffffff' },
+      { text: 'EQUIPPED // READY', small: true, color: '#7dff8a' },
+      { text: 'MISSION: ' + mission.desc.toUpperCase(), small: true, color: '#ffe14d' },
+      { text: META.missionProgress(mission) + ' / ' + mission.target, progress, color: '#ffffff' },
+      { text: combo > 1 ? 'COMBO x' + combo + ' // HOT' : 'COMBO // BUILD IT', color: combo > 1 ? '#ff5df1' : 'rgba(235,245,255,0.65)' },
+    ]);
+    drawSponsorBoard(28, viewH - 70, wing, 'HYPERSTEEL', '#ffe14d');
+    drawSponsorBoard(viewW - wing - 28, viewH - 70, wing, 'CRYSTALCORE', '#7dff8a');
+  }
+}
+
 function drawBG() {
   const bg = g.createLinearGradient(0, 0, 0, GAME_H);
   bg.addColorStop(0, '#070912'); bg.addColorStop(0.45, '#101430'); bg.addColorStop(1, '#1c1044');
@@ -914,6 +1051,21 @@ function drawHUD() {
   g.font = '600 16px "Segoe UI", sans-serif';
   g.fillText('BEST ' + best, 14, 20);
   drawShardCounter(GAME_W - 14, 20, META.M.shards);
+  // A compact, always-live quest makes the first session's goal obvious.
+  const activeMission = META.MISSIONS.find(m => !META.M.missionsDone.includes(m.id));
+  if (activeMission && runTime < 30) {
+    const prog = META.missionProgress(activeMission);
+    const missionY = GAME_H - 315;
+    g.save();
+    g.fillStyle = 'rgba(5,12,28,0.82)'; roundRect(CX - 146, missionY, 292, 42, 10); g.fill();
+    g.strokeStyle = 'rgba(125,249,255,0.48)'; g.lineWidth = 1.5; roundRect(CX - 146, missionY, 292, 42, 10); g.stroke();
+    g.textAlign = 'left'; g.textBaseline = 'top'; g.font = '700 12px "Segoe UI", sans-serif'; g.fillStyle = '#ffe14d';
+    g.fillText('LIVE MISSION  ' + activeMission.desc.toUpperCase(), CX - 132, missionY + 8);
+    g.textAlign = 'right'; g.fillStyle = '#ffffff'; g.fillText(prog + ' / ' + activeMission.target, CX + 132, missionY + 8);
+    g.fillStyle = 'rgba(255,255,255,0.14)'; roundRect(CX - 132, missionY + 26, 264, 6, 3); g.fill();
+    g.fillStyle = '#7df9ff'; roundRect(CX - 132, missionY + 26, Math.max(6, 264 * prog / activeMission.target), 6, 3); g.fill();
+    g.restore();
+  }
   // combo
   if (combo > 1 && comboTimer > 0) {
     g.textAlign = 'center';
@@ -937,7 +1089,7 @@ function drawHUD() {
     g.textAlign = 'center';
     g.globalAlpha = Math.min(1, hintT);
     g.fillStyle = '#ffffff'; g.font = '700 22px "Segoe UI", sans-serif';
-    g.fillText('TAP to throw — aim for a gap!', CX, GAME_H - 200);
+    g.fillText('TAP / SPACE TO THROW — AIM FOR A GAP!', CX, GAME_H - 200);
     g.globalAlpha = 1;
   }
   // blade icons counter (left side)
@@ -993,13 +1145,14 @@ function roundRect(x, y, w, h, r) {
 
 const BTN = {
   play: { x: CX, y: 620, w: 260, h: 74 },
-  shop: { x: 110, y: 720, w: 170, h: 54 },
-  bosses: { x: 285, y: 720, w: 160, h: 54 },
-  missions: { x: 452, y: 720, w: 155, h: 54 },
+  // 64 logical pixels keeps every mobile action above a 44px physical target.
+  shop: { x: 110, y: 720, w: 170, h: 64 },
+  bosses: { x: 285, y: 720, w: 160, h: 64 },
+  missions: { x: 452, y: 720, w: 155, h: 64 },
   continue: { x: CX, y: 520, w: 320, h: 66 },
   x2: { x: CX, y: 604, w: 320, h: 60 },
   again: { x: CX, y: 686, w: 300, h: 66 },
-  back: { x: 80, y: 46, w: 120, h: 52 },
+  back: { x: 80, y: 46, w: 120, h: 64 },
 };
 
 // shop grid geometry (3 cols x 4 rows)
@@ -1146,8 +1299,14 @@ function drawMissions() {
 }
 
 function draw() {
+  // Reset to CSS-pixel coordinates for the full viewport, then project the
+  // fixed mechanical playfield into the centre of the arena.
+  g.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  g.clearRect(0, 0, viewW, viewH);
+  drawArena();
   g.save();
-  g.translate(shakeX, shakeY);
+  g.translate(stageX + shakeX * stageScale, stageY + shakeY * stageScale);
+  g.scale(stageScale, stageScale);
   drawBG();
 
   if (state === 'menu') {
@@ -1318,8 +1477,8 @@ function draw() {
 function gamePos(e) {
   const r = canvas.getBoundingClientRect();
   return {
-    x: (e.clientX - r.left) * (GAME_W / r.width),
-    y: (e.clientY - r.top) * (GAME_H / r.height),
+    x: (e.clientX - r.left - stageX) / stageScale,
+    y: (e.clientY - r.top - stageY) / stageScale,
   };
 }
 function inBtn(p, b) { return Math.abs(p.x - b.x) < b.w / 2 && Math.abs(p.y - b.y) < b.h / 2; }
@@ -1372,10 +1531,17 @@ window.addEventListener('keydown', (e) => {
 // ---------- resize ----------
 function resize() {
   const vw = window.innerWidth, vh = window.innerHeight;
-  const s = Math.min(vw / GAME_W, vh / GAME_H);
-  canvas.width = GAME_W; canvas.height = GAME_H;
-  canvas.style.width = (GAME_W * s) + 'px';
-  canvas.style.height = (GAME_H * s) + 'px';
+  pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  viewW = vw; viewH = vh;
+  // Fit the interactive lane on mobile; desktop retains its useful height and
+  // devotes the rest of the viewport to the arena broadcast rather than bars.
+  stageScale = Math.min(vw / GAME_W, vh / GAME_H);
+  stageX = (vw - GAME_W * stageScale) * 0.5;
+  stageY = (vh - GAME_H * stageScale) * 0.5;
+  canvas.width = Math.max(1, Math.round(vw * pixelRatio));
+  canvas.height = Math.max(1, Math.round(vh * pixelRatio));
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
 }
 window.addEventListener('resize', resize);
 resize();
@@ -1431,5 +1597,6 @@ if (new URLSearchParams(location.search).get('debug') === '1') {
     openMissions: () => { state = 'missions'; },
     goMenu: () => { state = 'menu'; },
     resetMeta: () => { localStorage.removeItem('bladerush.meta'); },
+    getLayout: () => ({ viewW, viewH, pixelRatio, stageScale, stageX, stageY, minControlPx: Math.min(BTN.shop.h, BTN.bosses.h, BTN.missions.h, BTN.back.h) * stageScale }),
   };
 }

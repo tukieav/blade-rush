@@ -6,7 +6,9 @@
   "private": true,
   "scripts": {
     "build": "esbuild src/main.js --bundle --minify --outfile=dist/bundle.js && node scripts/pack.mjs",
-    "dev": "esbuild src/main.js --bundle --outfile=dist/bundle.js --watch --servedir=dist"
+    "dev": "esbuild src/main.js --bundle --outfile=dist/bundle.js --watch --servedir=dist",
+    "test": "node tests/e2e.mjs",
+    "test:desktop": "node tools/e2e-desktop.cjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.12",

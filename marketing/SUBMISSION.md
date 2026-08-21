@@ -66,6 +66,8 @@ Click / tap / Space — throw blade.
 - Cover 16:9 (1920x1080): marketing/cover-16x9.png
 - Cover 1:1 (1080x1080): marketing/cover-1x1.png
 - Screenshots: marketing/screenshot-menu.png, marketing/screenshot-gameplay.png
+- Desktop arena QA: qa/desktop/1280x720.png, qa/desktop/1920x1080.png
+- Gameplay capture: marketing/video-landscape.webm
 
 ## Age rating / audience
 All ages; designed for 10–16. No violence, no blood (energy blades into a wooden
