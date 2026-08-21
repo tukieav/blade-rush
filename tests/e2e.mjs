@@ -5,8 +5,8 @@ const BASE = process.env.BASE_URL || 'http://localhost:8514';
 const errors = [];
 let failed = 0;
 
-function check(name, cond) {
-  console.log((cond ? 'PASS' : 'FAIL') + ' — ' + name);
+function check(name, cond, detail = '') {
+  console.log((cond ? 'PASS' : 'FAIL') + ' — ' + name + (detail ? ' (' + detail + ')' : ''));
   if (!cond) failed++;
 }
 
@@ -154,12 +154,15 @@ const eqBack = await page.evaluate(() => window.__astro.equipBlade('neon'));
 st = await page.evaluate(() => window.__astro.getState());
 check('equip switches blade', eqBack && st.equipped === 'neon');
 
-// shop click-to-equip via pointer (first cell = neon; second = crimson)
-[px, py] = toCss(270, 210); // cell index 1 (col 1) -> crimson at x=270,y=210
-await page.mouse.click(px, py);
+// shop click-to-equip via a fresh physical canvas coordinate (second cell = crimson).
+// Re-read the box because reload/progression flow can replace the backing canvas.
+const shopBox = await page.locator('#game').boundingBox();
+const shopLayout = await page.evaluate(() => window.__astro.getLayout());
+[px, py] = [shopBox.x + shopLayout.stageX + 270 * shopLayout.stageScale, shopBox.y + shopLayout.stageY + 210 * shopLayout.stageScale];
+await page.locator('#game').dispatchEvent('pointerdown', { clientX: px, clientY: py, pointerId: 1, pointerType: 'mouse', isPrimary: true });
 await page.waitForTimeout(200);
 st = await page.evaluate(() => window.__astro.getState());
-check('tap cell equips owned blade', st.equipped === 'crimson');
+check('tap cell equips owned blade', st.equipped === 'crimson', JSON.stringify({ equipped: st.equipped, owned: st.owned }));
 
 // boss gallery + missions screens render
 await page.evaluate(() => { window.__astro.goMenu(); window.__astro.openBosses(); });

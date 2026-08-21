@@ -7,9 +7,13 @@ import * as META from './meta.js';
 const GAME_W = 540, GAME_H = 960;
 const CX = 270, TARGET_Y = 300;
 const BLADE_LEN = 88, BLADE_W = 16;
-const BLADE_GAP = 0.175; // ~10 deg angular collision
+// Collision follows the solid blade spine, not its intentionally generous glow.
+const BLADE_CORE_W = BLADE_W * 0.46;
 const CRYSTAL_GAP = 0.21;
 const THROW_SPEED = 2600;
+const FIXED_STEP = 1 / 120;
+const MAX_PARTICLES = 180, MAX_CONFETTI = 90, MAX_TRAIL = 18;
+const MAX_FLOATS = 20, MAX_TOASTS = 4, MAX_PIECES = 30;
 
 const canvas = document.getElementById('game');
 const g = canvas.getContext('2d');
@@ -55,6 +59,9 @@ let runBosses = 0;     // bosses killed this run
 let x2Used = false;
 let hintT = 0;         // contextual hint timer (first-session teaching)
 let shopScroll = 0;
+let paused = false;
+const pauseReasons = new Set();
+let reducedMotion = false;
 
 // ---------- levels ----------
 function isBoss(lv) { return lv % 5 === 0; }
@@ -92,16 +99,28 @@ function angDist(a, b) {
   return Math.min(d, Math.PI * 2 - d);
 }
 function norm(a) { a %= Math.PI * 2; return a < 0 ? a + Math.PI * 2 : a; }
+function boundedPush(list, item, max) { if (list.length >= max) list.shift(); list.push(item); }
+function bladeCoreGap() { return Math.asin(Math.min(0.99, (BLADE_CORE_W * 0.5) / Math.max(1, targetR))); }
 
-// ---------- rotation (dynamic difficulty: gentler first minute of a run) ----------
-function angVel(dt) {
-  patternT += dt;
-  const ease = 0.72 + 0.28 * Math.min(runTime / 60, 1); // 72% speed at start -> 100% after 60s
-  if (!irregular || runTime < 45) return baseSpeed * ease * dirSign;
-  // sinusoidal acceleration, momentary stops, direction flips
-  const s = Math.sin(patternT * 0.9) + 0.55 * Math.sin(patternT * 2.3 + 1.7);
-  return baseSpeed * ease * dirSign * s * 1.1;
+function patternState() {
+  const ease = 0.72 + 0.28 * Math.min(runTime / 60, 1);
+  if (level <= 4) return { kind: 'steady', speed: baseSpeed * ease, direction: dirSign, cue: 0, dual: false };
+  const phase = patternT % 6;
+  const variant = (level + (boss ? 1 : 0)) % 3;
+  if (variant === 0) {
+    const reversing = phase >= 3.4;
+    return { kind: 'reverse', speed: baseSpeed * ease, direction: dirSign * (reversing ? -1 : 1), cue: phase >= 2.55 && phase < 3.4 ? (phase - 2.55) / .85 : 0, dual: false };
+  }
+  if (variant === 1) {
+    const pulse = phase >= 2.2 && phase < 3.8;
+    const pulseT = pulse ? Math.sin((phase - 2.2) / 1.6 * Math.PI) : 0;
+    return { kind: 'pulse', speed: baseSpeed * ease * (1 + pulseT * .5), direction: dirSign, cue: phase >= 1.35 && phase < 2.2 ? (phase - 1.35) / .85 : 0, dual: false };
+  }
+  return { kind: 'dual', speed: baseSpeed * ease * .82, direction: dirSign, cue: phase < 1.2 ? 1 - phase / 1.2 : 0, dual: true };
 }
+
+// Rotation patterns are explicit, telegraphed cadence states rather than opaque noise.
+function angVel() { const p = patternState(); return p.speed * p.direction; }
 
 // ---------- shards ----------
 function gainShards(n, x, y) {
@@ -112,7 +131,7 @@ function gainShards(n, x, y) {
 }
 function onMissions(done) {
   for (const m of done) {
-    toasts.push({ txt: 'MISSION COMPLETE', sub: m.desc + '  +' + m.reward + ' \u25C6', t: 0, color: '#7dff8a' });
+    boundedPush(toasts, { txt: 'MISSION COMPLETE', sub: m.desc + '  +' + m.reward + ' \u25C6', t: 0, color: '#7dff8a' }, MAX_TOASTS);
     AU.missionSound();
     SDK.happytime();
   }
@@ -125,6 +144,9 @@ function startGame() {
   runTime = 0; runShards = 0; runBosses = 0; x2Used = false;
   hintT = 7; // every new run communicates the one-action core immediately
   firstHitThisRun = false;
+  // The daily toast has had a full menu exposure; do not let it cover the
+  // opening target or compete with the in-play teaching cue.
+  toasts = toasts.filter(t => !t.txt.startsWith('DAILY BONUS'));
   setupLevel(level);
   state = 'playing';
   onMissions(META.bump('runs', 1));
@@ -146,7 +168,7 @@ function impact() {
   const rel = norm(Math.PI / 2 - targetAngle);
   // hit an existing blade? -> game over
   for (const b of stuck) {
-    if (angDist(b.rel, rel) < BLADE_GAP) { startDeath(); return; }
+    if (angDist(b.rel, rel) < bladeCoreGap()) { startDeath(); return; }
   }
   // crystal?
   for (const c of crystals) {
@@ -162,7 +184,7 @@ function impact() {
     }
   }
   // stick!
-  stuck.push({ rel, wob: 1, wt: 0 });
+  stuck.push({ rel, wob: reducedMotion ? 0.35 : 1, wt: 0 });
   bladesLeft--;
   combo++;
   comboTimer = 1.6;
@@ -179,12 +201,11 @@ function impact() {
   if (openingHit) {
     firstHitThisRun = true;
     burstParticles(CX, TARGET_Y + targetR, 24);
-    addFloat('FIRST STRIKE!', CX, TARGET_Y - targetR - 38, '#7df9ff');
-    toasts.push({ txt: 'DIRECT HIT', sub: 'Keep the combo alive', t: 0, color: '#ffe14d' });
-    flashT = 0.14;
+    addFloat('FIRST STRIKE!', CX, TARGET_Y + targetR + 88, '#7df9ff');
+    flashT = reducedMotion ? 0.04 : 0.14;
   }
   AU.hitSound(combo);
-  flashT = 0.06;
+  flashT = reducedMotion ? 0.025 : 0.06;
   if (bladesLeft <= 0) {
     breakTarget();
   } else {
@@ -196,7 +217,7 @@ function impact() {
 function breakTarget() {
   state = 'break';
   breakT = 0;
-  shake = boss ? 26 : 18;
+  shake = reducedMotion ? 4 : (boss ? 26 : 18);
   AU.breakSound();
   pieces = [];
   const n = boss ? 10 : 7;
@@ -208,22 +229,22 @@ function breakTarget() {
   for (let i = 0; i < n; i++) {
     const a = (i / n) * Math.PI * 2 + Math.random() * 0.4;
     const sp = 260 + Math.random() * 320;
-    pieces.push({
+    boundedPush(pieces, {
       x: CX, y: TARGET_Y,
       vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 150,
       rot: Math.random() * Math.PI * 2, vr: (Math.random() - 0.5) * 12,
       a0: a, size: targetR * (0.35 + Math.random() * 0.3), boss, metal, tex,
       span: (Math.PI * 2 / n) * (0.85 + Math.random() * 0.3), r0: targetR,
-    });
+    }, MAX_PIECES);
   }
   // stuck blades fly off too
   for (const b of stuck) {
     const wa = targetAngle + b.rel;
-    pieces.push({
+    boundedPush(pieces, {
       x: CX + Math.cos(wa) * targetR, y: TARGET_Y + Math.sin(wa) * targetR,
       vx: Math.cos(wa) * 420, vy: Math.sin(wa) * 420 - 120,
       rot: wa - Math.PI / 2, vr: (Math.random() - 0.5) * 10, blade: true,
-    });
+    }, MAX_PIECES);
   }
   burstParticles(CX, TARGET_Y, boss ? 90 : 50);
   const lvBonus = (boss ? 500 : 100) * level;
@@ -244,9 +265,9 @@ function breakTarget() {
 
 function startDeath() {
   AU.clangSound();
-  shake = 26;
+  shake = reducedMotion ? 4 : 26;
   slowmo = 0.2;      // dramatic slow motion on blade-blade clash
-  flashT = 0.16;
+  flashT = reducedMotion ? 0.04 : 0.16;
   clashBurst(CX, TARGET_Y + targetR);
   deadBlade = { x: CX, y: TARGET_Y + targetR + BLADE_LEN * 0.5, vx: (Math.random() - 0.5) * 300, vy: 350, rot: -Math.PI / 2, vr: 9 + Math.random() * 5 };
   deathSnapshot = { stuck: stuck.map(b => ({ ...b })), crystals: crystals.map(c => ({ ...c })), bladesLeft, level, targetAngle };
@@ -268,8 +289,8 @@ async function tryContinue() {
   if (!canContinue) return;
   canContinue = false; continueUsed = true;
   const ok = await SDK.requestAd('rewarded', {
-    onStart: () => { AU.setMuted(true); },
-    onFinish: () => { AU.setMuted(muted); },
+    onStart: () => { pauseGameplay('ad'); AU.setMuted(true); },
+    onFinish: () => { AU.setMuted(muted); resumeGameplay('ad'); },
   });
   if (ok || !SDK.sdkAvailable()) {
     // restore level from death point
@@ -287,34 +308,36 @@ async function tryDouble() {
   if (x2Used || runShards <= 0) return;
   x2Used = true;
   const ok = await SDK.requestAd('rewarded', {
-    onStart: () => { AU.setMuted(true); },
-    onFinish: () => { AU.setMuted(muted); },
+    onStart: () => { pauseGameplay('ad'); AU.setMuted(true); },
+    onFinish: () => { AU.setMuted(muted); resumeGameplay('ad'); },
   });
   if (ok || !SDK.sdkAvailable()) {
     META.addShards(runShards);
-    toasts.push({ txt: 'SHARDS DOUBLED', sub: '+' + runShards + ' \u25C6', t: 0, color: '#7df9ff' });
+    boundedPush(toasts, { txt: 'SHARDS DOUBLED', sub: '+' + runShards + ' \u25C6', t: 0, color: '#7df9ff' }, MAX_TOASTS);
     runShards *= 2;
     AU.buySound();
   }
 }
 
 async function playAgain() {
-  await SDK.requestAd('midgame', {
-    onStart: () => { AU.setMuted(true); },
-    onFinish: () => { AU.setMuted(muted); },
-  });
+  // A new attempt is always instant. An optional natural-break ad may pause only
+  // after the attempt has started; it never gates the restart itself.
   startGame();
+  SDK.requestAd('midgame', {
+    onStart: () => { pauseGameplay('ad'); AU.setMuted(true); },
+    onFinish: () => { AU.setMuted(muted); resumeGameplay('ad'); },
+  });
 }
 
 // ---------- fx ----------
-function addFloat(txt, x, y, color) { floats.push({ txt, x, y, color, t: 0 }); }
+function addFloat(txt, x, y, color) { boundedPush(floats, { txt, x, y, color, t: 0 }, MAX_FLOATS); }
 function splinterParticles() {
   const y = TARGET_Y + targetR;
   for (let i = 0; i < 14; i++) {
     const a = Math.PI / 2 + (Math.random() - 0.5) * 1.6;
     const sp = 120 + Math.random() * 260;
     const col = boss || targetType === 'metal' ? '#9fb4c8' : targetType === 'energy' ? '#7df9ff' : '#c8955f';
-    particles.push({ x: CX, y, vx: Math.cos(a) * sp * (Math.random() < 0.5 ? -1 : 1) * 0.4, vy: -Math.abs(Math.sin(a)) * sp, t: 0, life: 0.5 + Math.random() * 0.3, c: col, s: 2 + Math.random() * 3, glow: targetType === 'energy' });
+    boundedPush(particles, { x: CX, y, vx: Math.cos(a) * sp * (Math.random() < 0.5 ? -1 : 1) * 0.4, vy: -Math.abs(Math.sin(a)) * sp, t: 0, life: 0.5 + Math.random() * 0.3, c: col, s: 2 + Math.random() * 3, glow: targetType === 'energy' }, MAX_PARTICLES);
   }
 }
 function crystalParticles(rel) {
@@ -322,13 +345,13 @@ function crystalParticles(rel) {
   const x = CX + Math.cos(wa) * targetR, y = TARGET_Y + Math.sin(wa) * targetR;
   for (let i = 0; i < 22; i++) {
     const a = Math.random() * Math.PI * 2, sp = 100 + Math.random() * 300;
-    particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, t: 0, life: 0.6 + Math.random() * 0.4, c: '#7df9ff', s: 2 + Math.random() * 2.5, glow: true });
+    boundedPush(particles, { x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, t: 0, life: 0.6 + Math.random() * 0.4, c: '#7df9ff', s: 2 + Math.random() * 2.5, glow: true }, MAX_PARTICLES);
   }
 }
 function burstParticles(x, y, n) {
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2, sp = 80 + Math.random() * 480;
-    particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 100, t: 0, life: 0.7 + Math.random() * 0.6, c: ['#ffe14d', '#ff5df1', '#7df9ff', '#c8955f'][i % 4], s: 2 + Math.random() * 4, glow: i % 3 === 0 });
+    boundedPush(particles, { x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 100, t: 0, life: 0.7 + Math.random() * 0.6, c: ['#ffe14d', '#ff5df1', '#7df9ff', '#c8955f'][i % 4], s: 2 + Math.random() * 4, glow: i % 3 === 0 }, MAX_PARTICLES);
   }
 }
 // hot sparks on blade impact (bright, short-lived, streaky)
@@ -336,14 +359,14 @@ function sparkBurst(x, y, n) {
   for (let i = 0; i < n; i++) {
     const a = -Math.PI / 2 + (Math.random() - 0.5) * 2.4;
     const sp = 220 + Math.random() * 420;
-    particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, t: 0, life: 0.25 + Math.random() * 0.3, c: i % 3 === 0 ? '#ffffff' : '#ffd24d', s: 1.5 + Math.random() * 2, glow: true, streak: true });
+    boundedPush(particles, { x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, t: 0, life: 0.25 + Math.random() * 0.3, c: i % 3 === 0 ? '#ffffff' : '#ffd24d', s: 1.5 + Math.random() * 2, glow: true, streak: true }, MAX_PARTICLES);
   }
 }
 // blade-blade clash: huge white flash + metal shards flying
 function clashBurst(x, y) {
   for (let i = 0; i < 34; i++) {
     const a = Math.random() * Math.PI * 2, sp = 180 + Math.random() * 620;
-    particles.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 120, t: 0, life: 0.4 + Math.random() * 0.5, c: i % 4 === 0 ? '#ffffff' : i % 4 === 1 ? '#ffd24d' : i % 4 === 2 ? '#aab6cc' : '#ff8a5d', s: 2 + Math.random() * 3.5, glow: true, streak: i % 2 === 0 });
+    boundedPush(particles, { x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 120, t: 0, life: 0.4 + Math.random() * 0.5, c: i % 4 === 0 ? '#ffffff' : i % 4 === 1 ? '#ffd24d' : i % 4 === 2 ? '#aab6cc' : '#ff8a5d', s: 2 + Math.random() * 3.5, glow: true, streak: i % 2 === 0 }, MAX_PARTICLES);
   }
 }
 // boss defeat confetti (colored rectangles with spin + drag)
@@ -351,7 +374,7 @@ function confettiBurst(x, y, n) {
   const cols = ['#7df9ff', '#ff5df1', '#ffe14d', '#7dff8a', '#ffab3d', '#c66bff'];
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2, sp = 150 + Math.random() * 450;
-    confetti.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 260, rot: Math.random() * Math.PI * 2, vr: (Math.random() - 0.5) * 14, t: 0, life: 1.6 + Math.random() * 1.0, c: cols[i % cols.length], w: 5 + Math.random() * 6, h: 3 + Math.random() * 4 });
+    boundedPush(confetti, { x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 260, rot: Math.random() * Math.PI * 2, vr: (Math.random() - 0.5) * 14, t: 0, life: 1.6 + Math.random() * 1.0, c: cols[i % cols.length], w: 5 + Math.random() * 6, h: 3 + Math.random() * 4 }, MAX_CONFETTI);
   }
 }
 // ambient falling embers in the arena background
@@ -377,14 +400,15 @@ function update(dt) {
   for (const b of stuck) { if (b.wob > 0) { b.wt += realDt; b.wob = Math.max(0, b.wob - realDt * 2.4); } }
   if (state === 'playing' || state === 'throwing' || state === 'break') {
     runTime += dt;
-    targetAngle = norm(targetAngle + angVel(dt) * dt);
+    patternT += dt;
+    targetAngle = norm(targetAngle + angVel() * dt);
   }
   if (comboTimer > 0) { comboTimer -= dt; if (comboTimer <= 0) combo = 0; }
   if (hintT > 0 && state === 'playing') hintT -= dt;
 
   if (state === 'throwing') {
     throwY -= THROW_SPEED * dt;
-    trail.push({ y: throwY, t: 0 });
+    boundedPush(trail, { y: throwY, t: 0 }, MAX_TRAIL);
     if (throwY <= TARGET_Y + targetR) { throwY = TARGET_Y + targetR; impact(); }
   }
   if (state === 'break') {
@@ -937,6 +961,52 @@ function drawBG() {
   g.fillStyle = fg; g.fillRect(0, GAME_H - 240, GAME_W, 240);
 }
 
+function safestRelativeAngle() {
+  let bestAngle = Math.PI / 2, bestClearance = -1;
+  for (let i = 0; i < 48; i++) {
+    const a = i / 48 * Math.PI * 2;
+    const bladeClearance = stuck.length ? Math.min(...stuck.map(b => angDist(a, b.rel))) : Math.PI;
+    const crystalClearance = crystals.filter(c => c.alive).length ? Math.min(...crystals.filter(c => c.alive).map(c => angDist(a, c.rel))) : Math.PI;
+    const clearance = Math.min(bladeClearance, crystalClearance * .72);
+    if (clearance > bestClearance) { bestClearance = clearance; bestAngle = a; }
+  }
+  return bestAngle;
+}
+
+function drawPatternTelegraph(rim) {
+  const p = patternState();
+  const beginner = level <= 4;
+  if (!beginner && !boss && p.cue <= 0 && !p.dual) return;
+  g.save();
+  g.translate(CX, TARGET_Y);
+  const motion = reducedMotion ? 0 : Math.sin(time * 8) * 0.08;
+  if (beginner || p.dual) {
+    const safe = targetAngle + safestRelativeAngle();
+    const width = beginner ? .40 : .22;
+    g.shadowColor = '#7dff8a'; g.shadowBlur = 18;
+    g.strokeStyle = 'rgba(125,255,138,0.95)'; g.lineWidth = 10;
+    g.beginPath(); g.arc(0, 0, targetR + 18, safe - width + motion, safe + width + motion); g.stroke();
+    if (p.dual) {
+      g.beginPath(); g.arc(0, 0, targetR + 18, safe + Math.PI - width, safe + Math.PI + width); g.stroke();
+    }
+    g.shadowBlur = 0;
+  }
+  const arrowA = -Math.PI / 2;
+  g.rotate(arrowA);
+  g.strokeStyle = p.direction > 0 ? '#7df9ff' : '#ff5df1'; g.lineWidth = 4;
+  g.shadowColor = g.strokeStyle; g.shadowBlur = 12;
+  g.beginPath(); g.arc(0, 0, targetR + 38, p.direction > 0 ? -.7 : .7, p.direction > 0 ? .7 : -.7, p.direction < 0); g.stroke();
+  g.shadowBlur = 0;
+  const label = beginner ? (p.direction > 0 ? 'ROTATE ↻' : 'ROTATE ↺') : p.kind === 'reverse' ? 'REVERSAL INCOMING' : p.kind === 'pulse' ? 'SPEED PULSE INCOMING' : 'TWO SAFE WINDOWS';
+  if (beginner || p.cue > 0 || boss || p.dual) {
+    g.rotate(-arrowA);
+    g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = '800 13px "Segoe UI", sans-serif';
+    g.fillStyle = p.cue > 0 || boss ? (boss && bossInfo ? bossInfo.rim : '#ffe14d') : rim;
+    g.fillText(label, 0, targetR + 54);
+  }
+  g.restore();
+}
+
 function drawTarget() {
   let tex;
   if (boss && bossInfo) tex = bossTexture(bossInfo, 190);
@@ -946,6 +1016,7 @@ function drawTarget() {
     tex = targetCaches.get(key);
   }
   const rim = boss && bossInfo ? bossInfo.rim : (targetType === 'metal' ? '#bfd4ee' : targetType === 'energy' ? '#7df9ff' : '#ffab3d');
+  if (state === 'playing' || state === 'throwing') drawPatternTelegraph(rim);
   g.save();
   g.translate(CX, TARGET_Y);
   // boss aura: pulsing colored haze + orbiting motes
@@ -1528,6 +1599,28 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Escape' && (state === 'shop' || state === 'bosses' || state === 'missions')) state = 'menu';
 });
 
+function activeGameplay() { return state === 'playing' || state === 'throwing' || state === 'break' || state === 'dying'; }
+function pauseGameplay(reason) {
+  pauseReasons.add(reason);
+  if (paused || !activeGameplay()) return;
+  paused = true;
+  SDK.gameplayStop();
+  AU.setPaused(true);
+}
+function resumeGameplay(reason) {
+  pauseReasons.delete(reason);
+  if (!paused || pauseReasons.size || !activeGameplay()) return;
+  paused = false;
+  lastT = 0;
+  AU.setPaused(false);
+  SDK.gameplayStart();
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) pauseGameplay('hidden'); else resumeGameplay('hidden');
+});
+window.addEventListener('blur', () => pauseGameplay('blur'));
+window.addEventListener('focus', () => resumeGameplay('blur'));
+
 // ---------- resize ----------
 function resize() {
   const vw = window.innerWidth, vh = window.innerHeight;
@@ -1547,11 +1640,17 @@ window.addEventListener('resize', resize);
 resize();
 
 // ---------- loop ----------
-let lastT = 0;
+let lastT = 0, accumulator = 0;
 function frame(ts) {
-  const dt = Math.min((ts - lastT) / 1000, 0.05);
+  const dt = Math.min((ts - lastT) / 1000, 0.1);
   lastT = ts;
-  update(dt);
+  if (!paused) {
+    accumulator = Math.min(accumulator + dt, 0.25);
+    while (accumulator >= FIXED_STEP) {
+      update(FIXED_STEP);
+      accumulator -= FIXED_STEP;
+    }
+  }
   draw();
   requestAnimationFrame(frame);
 }
@@ -1566,8 +1665,11 @@ let booted = false;
   muted = SDK.getMuteSetting();
   AU.setMuted(muted);
   SDK.onSettingsChange((s) => { muted = !!s.muteAudio; AU.setMuted(muted); });
+  const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+  reducedMotion = motionQuery.matches;
+  motionQuery.addEventListener('change', (e) => { reducedMotion = e.matches; });
   const daily = META.checkDaily();
-  if (daily) toasts.push({ txt: 'DAILY BONUS — DAY ' + daily.day, sub: '+' + daily.reward + ' \u25C6 shards', t: 0, color: '#ffe14d' });
+  if (daily) boundedPush(toasts, { txt: 'DAILY BONUS — DAY ' + daily.day, sub: '+' + daily.reward + ' \u25C6 shards', t: 0, color: '#ffe14d' }, MAX_TOASTS);
   if (state === 'menu') setupLevel(1); // don't reset a game started before boot finished
   SDK.loadingStop();
   booted = true;
@@ -1598,5 +1700,22 @@ if (new URLSearchParams(location.search).get('debug') === '1') {
     goMenu: () => { state = 'menu'; },
     resetMeta: () => { localStorage.removeItem('bladerush.meta'); },
     getLayout: () => ({ viewW, viewH, pixelRatio, stageScale, stageX, stageY, minControlPx: Math.min(BTN.shop.h, BTN.bosses.h, BTN.missions.h, BTN.back.h) * stageScale }),
+    getDebugCounts: () => ({ particles: particles.length, confetti: confetti.length, trail: trail.length, floats: floats.length, toasts: toasts.length, pieces: pieces.length, pauseReasons: pauseReasons.size }),
+    setStuckAngles: (angles) => { stuck = angles.map(rel => ({ rel, wob: 0, wt: 0 })); },
+    checkImpactAt: (rel) => stuck.some(b => angDist(b.rel, norm(rel)) < bladeCoreGap()),
+    setPausedForTest: (v) => { if (v) pauseGameplay('test'); else resumeGameplay('test'); },
+    simulateCadence: (hz, seconds) => {
+      level = 6; setupLevel(6); state = 'playing'; runTime = 50; patternT = 0; targetAngle = 0;
+      let carry = 0;
+      for (let i = 0; i < Math.round(hz * seconds); i++) {
+        carry += 1 / hz;
+        while (carry + 1e-10 >= FIXED_STEP) { update(FIXED_STEP); carry = Math.max(0, carry - FIXED_STEP); }
+      }
+      return { angle: targetAngle, patternT, runTime, speed: angVel() };
+    },
+    advance: (seconds) => { for (let i = 0; i < Math.round(seconds / FIXED_STEP); i++) update(FIXED_STEP); },
+    restart: () => startGame(),
+    reloadMeta: () => META.load(),
+    migrateMetaForTest: (raw) => META.replaceWithMigrated(raw),
   };
 }
