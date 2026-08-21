@@ -8,11 +8,13 @@ await page.waitForFunction(() => window.__astro && window.__astro.booted());
 await page.waitForTimeout(600);
 const shot = (n) => page.screenshot({ path: 'marketing/qa-' + n + '.png' });
 await shot('menu');
+await page.screenshot({ path: 'marketing/screenshot-menu.png' });
 // gameplay wood (level 1) with some stuck blades
 await page.evaluate(() => window.__astro.setLevel(1));
 await page.waitForTimeout(200);
 for (let i = 0; i < 3; i++) { await page.evaluate(() => window.__astro.throwNow()); await page.waitForTimeout(500); }
 await shot('wood');
+await page.screenshot({ path: 'marketing/screenshot-gameplay.png' });
 // metal (level 3)
 await page.evaluate(() => window.__astro.setLevel(3));
 for (let i = 0; i < 2; i++) { await page.evaluate(() => window.__astro.throwNow()); await page.waitForTimeout(500); }
