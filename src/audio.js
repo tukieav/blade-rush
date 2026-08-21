@@ -2,6 +2,7 @@
 let ctx = null;
 let masterGain = null;
 let muted = false;
+let paused = false;
 
 function ensureCtx() {
   if (!ctx) {
@@ -10,7 +11,7 @@ function ensureCtx() {
     masterGain.gain.value = 0.5;
     masterGain.connect(ctx.destination);
   }
-  if (ctx.state === 'suspended') ctx.resume();
+  if (!paused && ctx.state === 'suspended') ctx.resume();
 }
 
 export function setMuted(m) {
@@ -18,10 +19,19 @@ export function setMuted(m) {
   if (masterGain) masterGain.gain.value = m ? 0 : 0.5;
 }
 
+// Lifecycle pause is deliberately separate from user/portal mute: returning
+// from an ad/tab restores the player's chosen mute setting rather than sound.
+export function setPaused(value) {
+  paused = value;
+  if (!ctx) return;
+  if (value && ctx.state === 'running') ctx.suspend();
+  if (!value && ctx.state === 'suspended') ctx.resume();
+}
+
 export function unlockAudio() { ensureCtx(); }
 
 function tone(freq, dur, type, vol, delay = 0, drop = 0.5) {
-  if (muted || !ctx) return;
+  if (muted || paused || !ctx) return;
   const t0 = ctx.currentTime + delay;
   const osc = ctx.createOscillator();
   const g = ctx.createGain();
@@ -35,7 +45,7 @@ function tone(freq, dur, type, vol, delay = 0, drop = 0.5) {
 }
 
 function noise(dur, vol, delay = 0, hp = 1200) {
-  if (muted || !ctx) return;
+  if (muted || paused || !ctx) return;
   const t0 = ctx.currentTime + delay;
   const len = Math.floor(ctx.sampleRate * dur);
   const buf = ctx.createBuffer(1, len, ctx.sampleRate);

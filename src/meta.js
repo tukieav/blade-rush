@@ -49,10 +49,12 @@ export const MISSIONS = [
 
 // ---------- persistent state ----------
 const KEY = 'bladerush.meta';
+const SAVE_VERSION = 2;
 export let M = defaultMeta();
 
 function defaultMeta() {
   return {
+    version: SAVE_VERSION,
     shards: 0,
     owned: ['neon'],
     equipped: 'neon',
@@ -67,17 +69,35 @@ export function load() {
   let raw = null;
   try { raw = SDK.loadData(KEY); } catch (e) {}
   if (raw) {
-    try {
-      const p = JSON.parse(raw);
-      M = Object.assign(defaultMeta(), p);
-      M.stats = Object.assign(defaultMeta().stats, p.stats || {});
-      M.streak = Object.assign(defaultMeta().streak, p.streak || {});
-      if (!M.owned.includes('neon')) M.owned.push('neon');
-      if (!M.owned.includes(M.equipped)) M.equipped = 'neon';
-    } catch (e) { M = defaultMeta(); }
+    M = migrateRaw(raw);
+    save(); // transparently migrate old but valid saves to the current schema
   }
   return M;
 }
+
+// Kept exported for browser regression tests and future import migrations.
+export function migrateRaw(raw) {
+  try {
+    const p = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!p || typeof p !== 'object' || Array.isArray(p)) throw new Error('invalid save shape');
+    const next = Object.assign(defaultMeta(), p);
+    next.version = SAVE_VERSION;
+    next.stats = Object.assign(defaultMeta().stats, p.stats && typeof p.stats === 'object' ? p.stats : {});
+    next.streak = Object.assign(defaultMeta().streak, p.streak && typeof p.streak === 'object' ? p.streak : {});
+    next.owned = Array.isArray(p.owned) ? p.owned.filter(id => BLADES.some(b => b.id === id)) : ['neon'];
+    next.bossesSeen = Array.isArray(p.bossesSeen) ? p.bossesSeen.filter(Number.isInteger) : [];
+    next.missionsDone = Array.isArray(p.missionsDone) ? p.missionsDone.filter(id => MISSIONS.some(m => m.id === id)) : [];
+    next.shards = Number.isFinite(Number(p.shards)) ? Math.max(0, Number(p.shards)) : 0;
+    for (const key of Object.keys(next.stats)) next.stats[key] = Number.isFinite(Number(next.stats[key])) ? Math.max(0, Number(next.stats[key])) : 0;
+    next.streak.last = typeof next.streak.last === 'string' ? next.streak.last : '';
+    next.streak.count = Number.isFinite(Number(next.streak.count)) ? Math.max(0, Number(next.streak.count)) : 0;
+    if (!next.owned.includes('neon')) next.owned.push('neon');
+    if (typeof next.equipped !== 'string' || !next.owned.includes(next.equipped)) next.equipped = 'neon';
+    return next;
+  } catch (e) { return defaultMeta(); }
+}
+
+export function replaceWithMigrated(raw) { M = migrateRaw(raw); return M; }
 
 export function save() {
   try { SDK.saveData(KEY, JSON.stringify(M)); } catch (e) {}
