@@ -104,19 +104,19 @@ function bladeCoreGap() { return Math.asin(Math.min(0.99, (BLADE_CORE_W * 0.5) /
 
 function patternState() {
   const ease = 0.72 + 0.28 * Math.min(runTime / 60, 1);
-  if (level <= 4) return { kind: 'steady', speed: baseSpeed * ease, direction: dirSign, cue: 0, dual: false };
+  if (level <= 4) return { kind: 'steady', speed: baseSpeed * ease, direction: dirSign, cue: 0, dual: false, phase: 0 };
   const phase = patternT % 6;
   const variant = (level + (boss ? 1 : 0)) % 3;
   if (variant === 0) {
     const reversing = phase >= 3.4;
-    return { kind: 'reverse', speed: baseSpeed * ease, direction: dirSign * (reversing ? -1 : 1), cue: phase >= 2.55 && phase < 3.4 ? (phase - 2.55) / .85 : 0, dual: false };
+    return { kind: 'reverse', speed: baseSpeed * ease, direction: dirSign * (reversing ? -1 : 1), cue: phase >= 2.55 && phase < 3.4 ? (phase - 2.55) / .85 : 0, dual: false, phase, active: reversing };
   }
   if (variant === 1) {
     const pulse = phase >= 2.2 && phase < 3.8;
     const pulseT = pulse ? Math.sin((phase - 2.2) / 1.6 * Math.PI) : 0;
-    return { kind: 'pulse', speed: baseSpeed * ease * (1 + pulseT * .5), direction: dirSign, cue: phase >= 1.35 && phase < 2.2 ? (phase - 1.35) / .85 : 0, dual: false };
+    return { kind: 'pulse', speed: baseSpeed * ease * (1 + pulseT * .5), direction: dirSign, cue: phase >= 1.35 && phase < 2.2 ? (phase - 1.35) / .85 : 0, dual: false, phase, active: pulse };
   }
-  return { kind: 'dual', speed: baseSpeed * ease * .82, direction: dirSign, cue: phase < 1.2 ? 1 - phase / 1.2 : 0, dual: true };
+  return { kind: 'dual', speed: baseSpeed * ease * .82, direction: dirSign, cue: phase < 1.2 ? 1 - phase / 1.2 : 0, dual: true, phase, active: true };
 }
 
 // Rotation patterns are explicit, telegraphed cadence states rather than opaque noise.
@@ -130,11 +130,18 @@ function gainShards(n, x, y) {
   AU.shardSound();
 }
 function onMissions(done) {
-  for (const m of done) {
-    boundedPush(toasts, { txt: 'MISSION COMPLETE', sub: m.desc + '  +' + m.reward + ' \u25C6', t: 0, color: '#7dff8a' }, MAX_TOASTS);
-    AU.missionSound();
-    SDK.happytime();
-  }
+  if (!done.length) return;
+  const reward = done.reduce((total, m) => total + m.reward, 0);
+  const one = done.length === 1;
+  // A single outcome card keeps simultaneous milestones readable instead of
+  // stacking notifications over the live target.
+  boundedPush(toasts, {
+    txt: one ? 'MISSION COMPLETE' : done.length + ' MISSIONS COMPLETE',
+    sub: one ? done[0].desc + '  +' + done[0].reward + ' \u25C6' : '+' + reward + ' \u25C6 rewards',
+    t: 0, color: '#7dff8a',
+  }, MAX_TOASTS);
+  AU.missionSound();
+  SDK.happytime();
 }
 
 // ---------- actions ----------
@@ -997,7 +1004,7 @@ function drawPatternTelegraph(rim) {
   g.shadowColor = g.strokeStyle; g.shadowBlur = 12;
   g.beginPath(); g.arc(0, 0, targetR + 38, p.direction > 0 ? -.7 : .7, p.direction > 0 ? .7 : -.7, p.direction < 0); g.stroke();
   g.shadowBlur = 0;
-  const label = beginner ? (p.direction > 0 ? 'ROTATE ↻' : 'ROTATE ↺') : p.kind === 'reverse' ? 'REVERSAL INCOMING' : p.kind === 'pulse' ? 'SPEED PULSE INCOMING' : 'TWO SAFE WINDOWS';
+  const label = patternLabel(p, beginner);
   if (beginner || p.cue > 0 || boss || p.dual) {
     g.rotate(-arrowA);
     g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = '800 13px "Segoe UI", sans-serif';
@@ -1005,6 +1012,19 @@ function drawPatternTelegraph(rim) {
     g.fillText(label, 0, targetR + 54);
   }
   g.restore();
+}
+
+function patternLabel(p, beginner = level <= 4) {
+  if (beginner) return p.direction > 0 ? 'ROTATE ↻' : 'ROTATE ↺';
+  if (p.kind === 'reverse') {
+    if (p.active) return 'REVERSING NOW';
+    return p.cue > 0 ? 'REVERSAL INCOMING' : 'REVERSAL IN ' + Math.max(0, 3.4 - p.phase).toFixed(1) + 's';
+  }
+  if (p.kind === 'pulse') {
+    if (p.active) return 'SPEED PULSE ACTIVE';
+    return p.cue > 0 ? 'SPEED PULSE INCOMING' : 'PULSE IN ' + Math.max(0, 2.2 - p.phase).toFixed(1) + 's';
+  }
+  return 'TWO SAFE WINDOWS';
 }
 
 function drawTarget() {
@@ -1175,8 +1195,11 @@ function drawHUD() {
 }
 
 function drawToasts() {
-  let y = 150;
-  for (const t of toasts) {
+  // Reserve the target and its predictive cue while the player can throw.
+  // The latest card carries the outcome without competing with that decision.
+  const layout = toastLayout();
+  let y = layout.top;
+  for (const t of layout.visible) {
     const a = t.t < 0.25 ? t.t / 0.25 : t.t > 2.7 ? Math.max(0, 1 - (t.t - 2.7) / 0.5) : 1;
     g.save(); g.globalAlpha = a;
     g.shadowColor = t.color; g.shadowBlur = 16;
@@ -1193,6 +1216,11 @@ function drawToasts() {
     g.restore();
     y += 74;
   }
+}
+
+function toastLayout() {
+  const inPlay = activeGameplay();
+  return { visible: inPlay ? toasts.slice(-1) : toasts, top: inPlay ? 542 : 150 };
 }
 
 function drawButton(x, y, w, h, label, color, small) {
@@ -1221,7 +1249,7 @@ const BTN = {
   bosses: { x: 285, y: 720, w: 160, h: 64 },
   missions: { x: 452, y: 720, w: 155, h: 64 },
   continue: { x: CX, y: 520, w: 320, h: 66 },
-  x2: { x: CX, y: 604, w: 320, h: 60 },
+  x2: { x: CX, y: 604, w: 320, h: 64 },
   again: { x: CX, y: 686, w: 300, h: 66 },
   back: { x: 80, y: 46, w: 120, h: 64 },
 };
@@ -1699,8 +1727,17 @@ if (new URLSearchParams(location.search).get('debug') === '1') {
     openMissions: () => { state = 'missions'; },
     goMenu: () => { state = 'menu'; },
     resetMeta: () => { localStorage.removeItem('bladerush.meta'); },
-    getLayout: () => ({ viewW, viewH, pixelRatio, stageScale, stageX, stageY, minControlPx: Math.min(BTN.shop.h, BTN.bosses.h, BTN.missions.h, BTN.back.h) * stageScale }),
+    getLayout: () => ({
+      viewW, viewH, pixelRatio, stageScale, stageX, stageY,
+      minControlPx: Math.min(BTN.shop.h, BTN.bosses.h, BTN.missions.h, BTN.back.h) * stageScale,
+      x2ControlPx: BTN.x2.h * stageScale,
+    }),
     getDebugCounts: () => ({ particles: particles.length, confetti: confetti.length, trail: trail.length, floats: floats.length, toasts: toasts.length, pieces: pieces.length, pauseReasons: pauseReasons.size }),
+    getPatternForTest: () => { const p = patternState(); return { ...p, label: patternLabel(p) }; },
+    getToastLayoutForTest: () => {
+      const layout = toastLayout();
+      return { top: layout.top, bottom: layout.top + (layout.visible.length ? 62 : 0), count: layout.visible.length, targetBottom: TARGET_Y + targetR, cueBottom: TARGET_Y + targetR + 62 };
+    },
     setStuckAngles: (angles) => { stuck = angles.map(rel => ({ rel, wob: 0, wt: 0 })); },
     checkImpactAt: (rel) => stuck.some(b => angDist(b.rel, norm(rel)) < bladeCoreGap()),
     setPausedForTest: (v) => { if (v) pauseGameplay('test'); else resumeGameplay('test'); },
