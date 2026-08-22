@@ -80,9 +80,7 @@ function load(src) { return new Promise(res => { const i = new Image(); i.onload
   g.strokeStyle = '#ffe14d'; g.lineWidth = fs * 0.06; g.shadowColor = '#ffe14d'; g.shadowBlur = fs * 0.3;
   g.beginPath(); g.moveTo(tx - fs * 1.7, ty + fs * 1.62); g.lineTo(tx + fs * 1.7, ty + fs * 1.62); g.stroke();
   g.shadowBlur = 0;
-  // tagline
-  g.fillStyle = 'rgba(255,255,255,0.85)'; g.font = '700 ' + fs * 0.24 + 'px "Segoe UI", sans-serif';
-  g.fillText('NEON KNIFE-THROW ARCADE', tx, ty + fs * 1.98);
+  // CrazyGames covers rule: no text besides the game's title.
   document.title = 'done';
 })();
 </script>
