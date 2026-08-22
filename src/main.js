@@ -229,6 +229,8 @@ function impact() {
 function breakTarget() {
   state = 'break';
   breakT = 0;
+  // One brief impact frame makes a clear feel weighty without disrupting timing.
+  if (!reducedMotion) slowmo = Math.max(slowmo, 0.075);
   shake = reducedMotion ? 4 : (boss ? 26 : 18);
   AU.breakSound();
   pieces = [];
@@ -959,6 +961,26 @@ function drawBG() {
     g.quadraticCurveTo(x - GAME_W / 28, GAME_H - h - 12, x, GAME_H - h);
   }
   g.lineTo(GAME_W, GAME_H); g.closePath(); g.fill();
+  // A combo wakes the stadium up: a restrained cyan/magenta colour wave moves
+  // across the same crowd shapes, keeping the arena palette coherent.
+  if (combo >= 3) {
+    const heat = Math.min((combo - 2) / 6, 1);
+    g.save();
+    g.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 15; i++) {
+      const x = i * (GAME_W / 14);
+      const phase = time * 5.2 - i * 0.72;
+      const lift = Math.max(0, Math.sin(phase));
+      if (lift <= 0) continue;
+      const col = i % 3 === 0 ? '#ff5df1' : i % 3 === 1 ? '#7df9ff' : '#ffe14d';
+      g.globalAlpha = lift * (0.16 + heat * 0.22);
+      g.fillStyle = col;
+      g.beginPath();
+      g.arc(x, GAME_H - 42 - lift * 20, 7 + lift * 5, 0, Math.PI * 2);
+      g.fill();
+    }
+    g.restore();
+  }
   // ambient drifting embers
   for (const a of ambient) {
     g.fillStyle = a.c;
