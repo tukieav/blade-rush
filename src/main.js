@@ -57,7 +57,7 @@ let runTime = 0;       // seconds since run start (dynamic difficulty)
 let runShards = 0;     // shards earned this run (for x2 ad)
 let runBosses = 0;     // bosses killed this run
 let x2Used = false;
-let hintT = 0;         // contextual hint timer (first-session teaching)
+let onboardingVisible = false; // persistent, first-level visual control teaching
 let shopScroll = 0;
 let paused = false;
 const pauseReasons = new Set();
@@ -149,7 +149,8 @@ function startGame() {
   level = 1; score = 0; combo = 0; comboTimer = 0;
   continueUsed = false;
   runTime = 0; runShards = 0; runBosses = 0; x2Used = false;
-  hintT = 7; // every new run communicates the one-action core immediately
+  // The cue is a first-save teaching moment, not recurring run-start copy.
+  onboardingVisible = !META.M.onboardingSeen;
   firstHitThisRun = false;
   // The daily toast has had a full menu exposure; do not let it cover the
   // opening target or compete with the in-play teaching cue.
@@ -163,6 +164,10 @@ function startGame() {
 
 function throwBlade() {
   if (state !== 'playing' || !readyBlade) return;
+  if (onboardingVisible) {
+    onboardingVisible = false;
+    META.completeOnboarding();
+  }
   readyBlade = false;
   state = 'throwing';
   throwY = GAME_H - 60; // tip position
@@ -411,7 +416,6 @@ function update(dt) {
     targetAngle = norm(targetAngle + angVel() * dt);
   }
   if (comboTimer > 0) { comboTimer -= dt; if (comboTimer <= 0) combo = 0; }
-  if (hintT > 0 && state === 'playing') hintT -= dt;
 
   if (state === 'throwing') {
     throwY -= THROW_SPEED * dt;
@@ -1175,14 +1179,7 @@ function drawHUD() {
     }
     g.restore();
   }
-  // contextual first-play hint
-  if (hintT > 0 && state === 'playing') {
-    g.textAlign = 'center';
-    g.globalAlpha = Math.min(1, hintT);
-    g.fillStyle = '#ffffff'; g.font = '700 22px "Segoe UI", sans-serif';
-    g.fillText('TAP / SPACE TO THROW — AIM FOR A GAP!', CX, GAME_H - 200);
-    g.globalAlpha = 1;
-  }
+  drawOnboardingCue();
   // blade icons counter (left side)
   for (let i = 0; i < bladesTotal; i++) {
     const used = i < bladesTotal - bladesLeft;
@@ -1192,6 +1189,27 @@ function drawHUD() {
     drawBlade(0, 0, -Math.PI / 2, 1, !used);
     g.restore(); g.globalAlpha = 1;
   }
+}
+
+function drawOnboardingCue() {
+  if (!onboardingVisible || level !== 1 || state !== 'playing') return;
+  const pulse = 0.72 + (reducedMotion ? 0 : Math.sin(time * 5) * 0.18);
+  const y = GAME_H - 204;
+  g.save();
+  g.globalAlpha = pulse;
+  g.shadowColor = '#7df9ff'; g.shadowBlur = 18;
+  g.fillStyle = 'rgba(7,12,28,0.84)';
+  roundRect(CX - 158, y - 34, 316, 68, 14); g.fill();
+  g.shadowBlur = 0;
+  g.strokeStyle = '#7df9ff'; g.lineWidth = 2;
+  roundRect(CX - 158, y - 34, 316, 68, 14); g.stroke();
+  drawBlade(CX - 108, y, -Math.PI / 2, 0.42, true);
+  g.textAlign = 'left'; g.textBaseline = 'middle';
+  g.fillStyle = '#ffffff'; g.font = '800 19px "Segoe UI", sans-serif';
+  g.fillText('CLICK / SPACE', CX - 70, y - 10);
+  g.fillStyle = '#7df9ff'; g.font = '700 14px "Segoe UI", sans-serif';
+  g.fillText('TO THROW', CX - 70, y + 14);
+  g.restore();
 }
 
 function drawToasts() {
@@ -1618,13 +1636,21 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 });
 window.addEventListener('keydown', (e) => {
+  // Physical codes keep the single action in the same place on QWERTY/AZERTY
+  // and other layouts. `key` is intentionally never consulted for gameplay.
   if (e.code === 'Space' || e.code === 'Enter') {
+    e.preventDefault();
     AU.unlockAudio();
     if (state === 'menu') startGame();
     else if (state === 'playing') throwBlade();
     else if (state === 'gameover') playAgain();
   }
-  if (e.code === 'Escape' && (state === 'shop' || state === 'bosses' || state === 'missions')) state = 'menu';
+  // Escape is only a convenience: every collection panel also has its visible
+  // Back button and Backspace works when fullscreen consumes Escape.
+  if ((e.code === 'Escape' || e.code === 'Backspace') && (state === 'shop' || state === 'bosses' || state === 'missions')) {
+    e.preventDefault();
+    state = 'menu';
+  }
 });
 
 function activeGameplay() { return state === 'playing' || state === 'throwing' || state === 'break' || state === 'dying'; }
@@ -1710,7 +1736,7 @@ if (new URLSearchParams(location.search).get('debug') === '1') {
     booted: () => booted,
     forceGameOver: () => { if (state === 'playing' || state === 'throwing') startDeath(); dieT = 2; doGameOver(); },
     getState: () => ({
-      state, level, score, bladesLeft, bladesTotal, combo, best, canContinue, continueUsed, stuck: stuck.length,
+      state, level, score, bladesLeft, bladesTotal, combo, best, canContinue, continueUsed, stuck: stuck.length, onboardingVisible,
       shards: META.M.shards, owned: META.M.owned.slice(), equipped: META.M.equipped,
       bossesSeen: META.M.bossesSeen.slice(), missionsDone: META.M.missionsDone.slice(),
       stats: { ...META.M.stats }, streak: { ...META.M.streak }, runShards, x2Used,

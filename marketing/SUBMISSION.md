@@ -16,21 +16,31 @@ Throw neon blades into rotating targets, avoid every embedded weapon, and shatte
 
 ## Full description
 
-Master one-button timing in a live neon arena. Launch each blade into a
-rotating target without striking a weapon that is already embedded. Consecutive
-hits build combos, while crystals and boss stages reward precise risk-taking.
+One clean throw can turn a rotating target into a chain reaction. Launch a
+blade into an open rim, avoid every blade already embedded, then clear the
+target before your supply runs out.
 
-Early targets show their rotation direction, speed trend, and a glowing safe
-sector. Later targets introduce clearly telegraphed reversals, acceleration
-pulses, and dual safe windows; boss arenas signal each pattern change before it
-matters. Earn Shards, complete missions, collect defeated bosses, and unlock
-twelve detailed blade designs in the Armory. A rewarded continue can rescue one
-difficult stage, but true progression comes from learning each rotation pattern.
+The core loop is throw, read the rotation, collect rim crystals, build a combo,
+and advance. Early targets show their direction and a safe sector. Later rounds
+telegraph reversals, speed pulses, and two safe windows; every fifth level is a
+boss target with its own warning colour and break effect. Successful hits give
+screen shake, sparks, a crowd colour wave at higher combos, and a brief target-
+break slow-motion frame.
+
+Shards come from crystals, levels, missions, and bosses. Spend them on twelve
+blade designs in the Armory, track defeated bosses in the gallery, and work
+through long-term missions for throws, crystals, combos, levels, and boss runs.
+A single optional rewarded Continue can save one failed stage; an optional x2
+reward doubles the Shards earned in that run.
 
 ## Controls
 
-- Desktop: click, Space, or Enter to throw; Escape returns from collection screens.
+- Desktop: click or Space to throw. The physical Space code works on QWERTY and AZERTY layouts; collection screens have visible Back buttons and also close with Backspace (Escape is optional convenience).
 - Mobile: tap to throw and use the on-screen buttons. The tested portrait controls are at least 44 CSS pixels tall.
+
+## Session length
+
+- A first run is a quick 2–5 minute arcade session; missions, bosses, and the Armory support longer return play.
 
 ## SDK, save, and ad behavior
 

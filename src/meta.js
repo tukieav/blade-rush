@@ -49,7 +49,7 @@ export const MISSIONS = [
 
 // ---------- persistent state ----------
 const KEY = 'bladerush.meta';
-const SAVE_VERSION = 2;
+const SAVE_VERSION = 3;
 export let M = defaultMeta();
 
 function defaultMeta() {
@@ -62,6 +62,7 @@ function defaultMeta() {
     missionsDone: [],        // mission ids claimed
     stats: { throws: 0, crystals: 0, bosses: 0, bestLevel: 1, bestCombo: 0, runs: 0, bestBossRun: 0 },
     streak: { last: '', count: 0 },
+    onboardingSeen: false,   // first level's visual control cue was actioned
   };
 }
 
@@ -91,6 +92,7 @@ export function migrateRaw(raw) {
     for (const key of Object.keys(next.stats)) next.stats[key] = Number.isFinite(Number(next.stats[key])) ? Math.max(0, Number(next.stats[key])) : 0;
     next.streak.last = typeof next.streak.last === 'string' ? next.streak.last : '';
     next.streak.count = Number.isFinite(Number(next.streak.count)) ? Math.max(0, Number(next.streak.count)) : 0;
+    next.onboardingSeen = p.onboardingSeen === true;
     if (!next.owned.includes('neon')) next.owned.push('neon');
     if (typeof next.equipped !== 'string' || !next.owned.includes(next.equipped)) next.equipped = 'neon';
     return next;
@@ -160,4 +162,10 @@ export function recordBossKill(bossId) {
 
 export function missionProgress(m) {
   return Math.min(M.stats[m.stat] || 0, m.target);
+}
+
+export function completeOnboarding() {
+  if (M.onboardingSeen) return;
+  M.onboardingSeen = true;
+  save();
 }
