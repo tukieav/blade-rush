@@ -850,10 +850,14 @@ function drawSponsorBoard(x, y, w, label, color) {
 
 function drawArena() {
   const bg = g.createLinearGradient(0, 0, 0, viewH);
-  bg.addColorStop(0, '#050817'); bg.addColorStop(0.47, '#111a42'); bg.addColorStop(1, '#080d22');
+  if (state === 'menu') {
+    bg.addColorStop(0, '#42205f'); bg.addColorStop(0.42, '#8a2e6e'); bg.addColorStop(1, '#e15b4e');
+  } else {
+    bg.addColorStop(0, '#050817'); bg.addColorStop(0.47, '#111a42'); bg.addColorStop(1, '#080d22');
+  }
   g.fillStyle = bg; g.fillRect(0, 0, viewW, viewH);
   // arena ceiling trusses
-  g.strokeStyle = 'rgba(105,142,205,0.16)'; g.lineWidth = 2;
+  g.strokeStyle = state === 'menu' ? 'rgba(255,235,174,0.38)' : 'rgba(105,142,205,0.16)'; g.lineWidth = 2;
   for (let x = -80; x < viewW + 100; x += 92) {
     g.beginPath(); g.moveTo(x, 0); g.lineTo(viewW / 2, viewH * 0.44); g.stroke();
   }
@@ -910,10 +914,16 @@ function drawArena() {
 
 function drawBG() {
   const bg = g.createLinearGradient(0, 0, 0, GAME_H);
-  bg.addColorStop(0, '#070912'); bg.addColorStop(0.45, '#101430'); bg.addColorStop(1, '#1c1044');
+  if (state === 'menu') {
+    bg.addColorStop(0, '#f45a9a'); bg.addColorStop(0.45, '#fa7755'); bg.addColorStop(1, '#ffbf56');
+  } else {
+    bg.addColorStop(0, '#070912'); bg.addColorStop(0.45, '#101430'); bg.addColorStop(1, '#1c1044');
+  }
   g.fillStyle = bg; g.fillRect(0, 0, GAME_W, GAME_H);
   for (const s of stars) {
-    g.fillStyle = 'rgba(180,220,255,' + (0.25 + 0.4 * Math.abs(Math.sin(time * 0.7 + s.tw))) + ')';
+    g.fillStyle = state === 'menu'
+      ? 'rgba(255,249,195,' + (0.28 + 0.48 * Math.abs(Math.sin(time * 0.7 + s.tw))) + ')'
+      : 'rgba(180,220,255,' + (0.25 + 0.4 * Math.abs(Math.sin(time * 0.7 + s.tw))) + ')';
     g.beginPath(); g.arc(s.x, s.y, s.r, 0, Math.PI * 2); g.fill();
   }
   // spotlight beams converging on the target from top corners
@@ -926,7 +936,7 @@ function drawBG() {
   for (const b of beams) {
     const tx = CX + b.sway, ty = TARGET_Y;
     const grad = g.createLinearGradient(b.x0, -40, tx, ty);
-    grad.addColorStop(0, 'rgba(125,180,255,0.10)');
+    grad.addColorStop(0, state === 'menu' ? 'rgba(255,248,190,0.30)' : 'rgba(125,180,255,0.10)');
     grad.addColorStop(1, 'rgba(125,180,255,0)');
     g.fillStyle = grad;
     g.beginPath();
@@ -936,7 +946,11 @@ function drawBG() {
   }
   // soft halo behind the target
   const halo = g.createRadialGradient(CX, TARGET_Y, 40, CX, TARGET_Y, 320);
-  halo.addColorStop(0, 'rgba(90,60,190,0.22)'); halo.addColorStop(0.6, 'rgba(60,40,140,0.10)'); halo.addColorStop(1, 'rgba(0,0,0,0)');
+  if (state === 'menu') {
+    halo.addColorStop(0, 'rgba(255,246,176,0.48)'); halo.addColorStop(0.6, 'rgba(255,152,85,0.18)'); halo.addColorStop(1, 'rgba(255,103,141,0)');
+  } else {
+    halo.addColorStop(0, 'rgba(90,60,190,0.22)'); halo.addColorStop(0.6, 'rgba(60,40,140,0.10)'); halo.addColorStop(1, 'rgba(0,0,0,0)');
+  }
   g.fillStyle = halo; g.beginPath(); g.arc(CX, TARGET_Y, 320, 0, Math.PI * 2); g.fill();
   g.restore();
   // neon side strips (arcade cabinet feel)
@@ -952,7 +966,7 @@ function drawBG() {
     g.restore();
   }
   // crowd silhouettes along the bottom (dark arena audience)
-  g.fillStyle = 'rgba(6,8,16,0.85)';
+  g.fillStyle = state === 'menu' ? 'rgba(74,27,69,0.42)' : 'rgba(6,8,16,0.85)';
   g.beginPath();
   g.moveTo(0, GAME_H);
   for (let i = 0; i <= 14; i++) {
@@ -992,6 +1006,26 @@ function drawBG() {
   const fg = g.createRadialGradient(CX, GAME_H - 30, 10, CX, GAME_H - 30, 260);
   fg.addColorStop(0, 'rgba(125,249,255,0.10)'); fg.addColorStop(1, 'rgba(125,249,255,0)');
   g.fillStyle = fg; g.fillRect(0, GAME_H - 240, GAME_W, 240);
+}
+
+function drawMenuLightRig() {
+  // The menu gets its own sunlit broadcast rig; gameplay retains the darker action lane.
+  g.save();
+  g.strokeStyle = 'rgba(74,31,91,0.72)'; g.lineWidth = 7;
+  g.beginPath(); g.moveTo(28, 94); g.lineTo(GAME_W - 28, 94); g.stroke();
+  for (let i = 0; i < 6; i++) {
+    const x = 62 + i * 83;
+    g.fillStyle = i % 2 ? '#ffdf62' : '#fff1b5';
+    g.shadowColor = g.fillStyle; g.shadowBlur = 20;
+    g.beginPath(); g.arc(x, 94, 11, 0, Math.PI * 2); g.fill();
+    g.shadowBlur = 0;
+    const targetX = CX + Math.sin(time * 0.65 + i) * 120;
+    const beam = g.createLinearGradient(x, 104, targetX, TARGET_Y + 110);
+    beam.addColorStop(0, i % 2 ? 'rgba(255,231,107,0.26)' : 'rgba(255,255,235,0.26)');
+    beam.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = beam; g.beginPath(); g.moveTo(x - 14, 105); g.lineTo(x + 14, 105); g.lineTo(targetX + 55, TARGET_Y + 110); g.lineTo(targetX - 55, TARGET_Y + 110); g.closePath(); g.fill();
+  }
+  g.restore();
 }
 
 function safestRelativeAngle() {
@@ -1449,22 +1483,23 @@ function draw() {
   drawBG();
 
   if (state === 'menu') {
+    drawMenuLightRig();
     // demo target
     drawTarget();
     g.textAlign = 'center'; g.textBaseline = 'middle';
-    // neon arcade sign: chromatic offset layers + flicker
+    // Warm, chunky arena marquee keeps the menu aligned with the bright cover.
     const flick = Math.random() < 0.02 ? 0.6 : 1;
     g.font = '900 74px "Segoe UI", sans-serif';
-    g.globalAlpha = 0.8 * flick;
-    g.fillStyle = '#ff5df1';
-    g.fillText('BLADE', CX - 3, 520 - 44); g.fillText('RUSH', CX - 3, 520 + 34);
-    g.fillStyle = '#7df9ff';
-    g.fillText('BLADE', CX + 3, 520 - 44); g.fillText('RUSH', CX + 3, 520 + 34);
-    g.globalAlpha = flick;
-    g.shadowColor = '#7df9ff'; g.shadowBlur = 30;
-    g.fillStyle = '#ffffff';
-    g.fillText('BLADE', CX, 520 - 44);
-    g.fillText('RUSH', CX, 520 + 34);
+    g.globalAlpha = flick; g.lineJoin = 'round';
+    g.shadowColor = 'rgba(94,28,81,0.7)'; g.shadowBlur = 0; g.shadowOffsetY = 8;
+    g.strokeStyle = '#762a66'; g.lineWidth = 13;
+    g.strokeText('BLADE', CX, 520 - 44); g.strokeText('RUSH', CX, 520 + 34);
+    g.shadowOffsetY = 0; g.strokeStyle = '#fff2ad'; g.lineWidth = 6;
+    g.strokeText('BLADE', CX, 520 - 44); g.strokeText('RUSH', CX, 520 + 34);
+    const marquee = g.createLinearGradient(0, 430, 0, 570);
+    marquee.addColorStop(0, '#fffce7'); marquee.addColorStop(0.45, '#ffe36a'); marquee.addColorStop(1, '#ff8e51');
+    g.shadowColor = '#fff0a0'; g.shadowBlur = 24; g.fillStyle = marquee;
+    g.fillText('BLADE', CX, 520 - 44); g.fillText('RUSH', CX, 520 + 34);
     g.shadowBlur = 0; g.globalAlpha = 1;
     // underline slash
     g.strokeStyle = '#ffe14d'; g.lineWidth = 4; g.shadowColor = '#ffe14d'; g.shadowBlur = 14;
