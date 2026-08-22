@@ -1,4 +1,4 @@
-// Accelerated mixed-play soak: 30 clears/restarts and 120 simulated seconds.
+// Accelerated mixed-play soak: 75 clears/restarts and 300 simulated seconds.
 const { chromium } = require('playwright');
 const BASE = process.env.BASE_URL || 'http://localhost:8527';
 let failed = 0;
@@ -21,7 +21,7 @@ function check(name, value, detail = '') { console.log((value ? 'PASS' : 'FAIL')
   check('soak frame health >=30 FPS', fps >= 30, fps.toFixed(1));
   const result = await page.evaluate(() => {
     const samples = [];
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 75; i++) {
       window.__astro.setLevel(i % 5 === 4 ? 5 : 2);
       window.__astro.throwNow(); window.__astro.advance(.5);
       window.__astro.winLevel(); window.__astro.advance(1.3);
@@ -33,7 +33,7 @@ function check(name, value, detail = '') { console.log((value ? 'PASS' : 'FAIL')
   });
   const caps = { particles: 180, confetti: 90, trail: 18, floats: 20, toasts: 4, pieces: 30 };
   for (const [key, cap] of Object.entries(caps)) check('soak bound ' + key, result.samples.every(s => s[key] <= cap) && result.final[key] <= cap, result.final[key] + '/' + cap);
-  check('soak completed 120 accelerated seconds', result.samples.length === 30);
+  check('soak completed 300 accelerated seconds', result.samples.length === 75);
   check('soak has zero page errors', errors.length === 0, errors.join(' | '));
   await browser.close();
   console.log(failed ? failed + ' SOAK TESTS FAILED' : 'ALL SOAK TESTS PASSED');
