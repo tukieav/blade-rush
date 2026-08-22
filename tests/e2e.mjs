@@ -194,6 +194,16 @@ await page.waitForTimeout(700);
 st = await page.evaluate(() => window.__astro.getState());
 check('keyboard space throws', st.stuck >= 1 || st.state === 'playing');
 
+// KeyboardEvent.key follows the active layout; code is the physical key. This
+// intentionally mismatches them to catch a regression back to layout-dependent input.
+await page.evaluate(() => window.__astro.setLevel(1));
+await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', {
+  code: 'Space', key: 'z', bubbles: true, cancelable: true,
+})));
+await page.waitForTimeout(700);
+st = await page.evaluate(() => window.__astro.getState());
+check('physical Space code throws with mismatched layout key', st.stuck >= 1 || st.level > 1, JSON.stringify({ state: st.state, stuck: st.stuck }));
+
 check('zero page/console errors', errors.length === 0);
 if (errors.length) console.log(errors.join('\n'));
 
