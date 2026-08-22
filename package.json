@@ -11,7 +11,8 @@
     "test:desktop": "node tools/e2e-desktop.cjs",
     "test:hardening": "node tools/e2e-hardening.cjs",
     "test:soak": "node tools/e2e-soak.cjs",
-    "test:polish": "node tools/e2e-final-polish.cjs"
+    "test:polish": "node tools/e2e-final-polish.cjs",
+    "test:covers": "node scripts/cover-brightness.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.25.12",
