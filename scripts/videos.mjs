@@ -1,6 +1,6 @@
 // Record gameplay preview videos (<20s) with the new art
 import { chromium } from 'playwright';
-const BASE = 'http://localhost:8527';
+const BASE = process.env.BASE_URL || 'http://localhost:8527';
 
 async function record(w, h, dir) {
   const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', headless: true });
